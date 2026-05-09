@@ -95,26 +95,8 @@ def search_memories(user_id: int, query: str, limit: int = 10):
     return rows
 
 
-@dp.message(Command("start"))
-async def start_handler(message: Message):
-    await message.answer(
-        "👋 Привет! Я Remindly — твоя вторая память для Telegram.\n\n"
-        "Отправь мне любой текст, мысль, ссылку или пересланное сообщение — я сохраню это.\n\n"
-        "Команды:\n"
-        "/memory — показать последние сохранения\n"
-        "/search запрос — найти сохранения"
-    )
-
-
-@dp.message(Command("memory"))
-async def memory_handler(message: Message):
-    memories = get_recent_memories(message.from_user.id)
-
-    if not memories:
-        await message.answer("Пока ничего не сохранено. Отправь мне первый текст.")
-        return
-
-    response = "🧠 Последние сохранения:\n\n"
+def format_memory_list(memories, title: str):
+    response = f"{title}\n\n"
 
     for index, (text, created_at) in enumerate(memories, start=1):
         short_text = text[:300]
@@ -124,6 +106,51 @@ async def memory_handler(message: Message):
 
         response += f"{index}. {short_text}\n"
         response += f"   🕒 {created_at}\n\n"
+
+    return response
+
+
+@dp.message(Command("start"))
+async def start_handler(message: Message):
+    await message.answer(
+        "👋 Привет! Я Remindly.\n\n"
+        "Отправь мне текст, ссылку, заметку или пересланное сообщение — я сохраню это в твою личную память.\n\n"
+        "Команды:\n"
+        "/memory — последние сохранения\n"
+        "/search запрос — поиск по сохранениям\n"
+        "/help — помощь"
+    )
+
+
+@dp.message(Command("help"))
+async def help_handler(message: Message):
+    await message.answer(
+        "Как пользоваться Remindly:\n\n"
+        "1. Отправь мне любой текст, ссылку или пересланное сообщение.\n"
+        "2. Я сохраню его в твою память.\n"
+        "3. Чтобы посмотреть последние записи, напиши /memory.\n"
+        "4. Чтобы найти нужную запись, напиши /search и запрос.\n\n"
+        "Пример:\n"
+        "/search договор\n\n"
+        "Пока я сохраняю только текстовые сообщения. Поддержку файлов и голосовых добавим позже."
+    )
+
+
+@dp.message(Command("memory"))
+async def memory_handler(message: Message):
+    memories = get_recent_memories(message.from_user.id)
+
+    if not memories:
+        await message.answer(
+            "Пока ничего не сохранено.\n\n"
+            "Отправь мне текст, ссылку или пересланное сообщение — и я сохраню это."
+        )
+        return
+
+    response = format_memory_list(
+        memories,
+        "🧠 Последние сохранения:"
+    )
 
     await message.answer(response)
 
@@ -136,7 +163,7 @@ async def search_handler(message: Message):
         await message.answer(
             "Напиши запрос после команды.\n\n"
             "Пример:\n"
-            "/search ГЧП"
+            "/search договор"
         )
         return
 
@@ -145,22 +172,14 @@ async def search_handler(message: Message):
 
     if not results:
         await message.answer(
-            f"Ничего не нашёл по запросу: «{query}».\n\n"
-            "Пока поиск работает по точному совпадению слов. "
-            "Позже добавим смысловой AI-поиск."
+            f"Ничего не найдено по запросу: «{query}»."
         )
         return
 
-    response = f"🔎 Нашёл по запросу: «{query}»\n\n"
-
-    for index, (text, created_at) in enumerate(results, start=1):
-        short_text = text[:300]
-
-        if len(text) > 300:
-            short_text += "..."
-
-        response += f"{index}. {short_text}\n"
-        response += f"   🕒 {created_at}\n\n"
+    response = format_memory_list(
+        results,
+        f"🔎 Результаты поиска по запросу: «{query}»"
+    )
 
     await message.answer(response)
 
@@ -168,7 +187,9 @@ async def search_handler(message: Message):
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
-        await message.answer("Пока я умею сохранять только текст. Файлы и голосовые добавим позже.")
+        await message.answer(
+            "Пока я умею сохранять только текстовые сообщения."
+        )
         return
 
     save_memory(
@@ -178,15 +199,15 @@ async def save_text_handler(message: Message):
     )
 
     await message.answer(
-        "✅ Сохранил в память.\n\n"
-        "Чтобы посмотреть последние записи, напиши /memory\n"
-        "Чтобы найти запись, напиши /search запрос"
+        "✅ Сохранено.\n\n"
+        "Посмотреть последние записи: /memory\n"
+        "Найти запись: /search запрос"
     )
 
 
 async def main():
     init_db()
-    print("Remindly запущен...")
+    print("Remindly started")
     await dp.start_polling(bot)
 
 
