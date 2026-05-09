@@ -1,8 +1,8 @@
 import asyncio
 import os
-import sqlite3
 from datetime import datetime
 
+import psycopg2
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -11,78 +11,85 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-DB_NAME = "memory.db"
+
+def get_connection():
+    return psycopg2.connect(DATABASE_URL)
 
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT NOT NULL,
             username TEXT,
             text TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TIMESTAMP NOT NULL
         )
     """)
 
     conn.commit()
+    cursor.close()
     conn.close()
 
 
 def save_memory(user_id: int, username: str | None, text: str):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         INSERT INTO memories (user_id, username, text, created_at)
-        VALUES (?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s)
     """, (
         user_id,
         username,
         text,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        datetime.now()
     ))
 
     conn.commit()
+    cursor.close()
     conn.close()
 
 
 def get_recent_memories(user_id: int, limit: int = 5):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT text, created_at
         FROM memories
-        WHERE user_id = ?
+        WHERE user_id = %s
         ORDER BY id DESC
-        LIMIT ?
+        LIMIT %s
     """, (user_id, limit))
 
     rows = cursor.fetchall()
+
+    cursor.close()
     conn.close()
 
     return rows
 
 
 def search_memories(user_id: int, query: str, limit: int = 10):
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         SELECT text, created_at
         FROM memories
-        WHERE user_id = ?
-        AND LOWER(text) LIKE LOWER(?)
+        WHERE user_id = %s
+        AND text ILIKE %s
         ORDER BY id DESC
-        LIMIT ?
+        LIMIT %s
     """, (
         user_id,
         f"%{query}%",
@@ -90,6 +97,8 @@ def search_memories(user_id: int, query: str, limit: int = 10):
     ))
 
     rows = cursor.fetchall()
+
+    cursor.close()
     conn.close()
 
     return rows
@@ -105,7 +114,7 @@ def format_memory_list(memories, title: str):
             short_text += "..."
 
         response += f"{index}. {short_text}\n"
-        response += f"   🕒 {created_at}\n\n"
+        response += f"   🕒 {created_at.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
     return response
 
@@ -207,7 +216,7 @@ async def save_text_handler(message: Message):
 
 async def main():
     init_db()
-    print("Remindly started")
+    print("Remindly started with PostgreSQL")
     await dp.start_polling(bot)
 
 
