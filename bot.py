@@ -72,13 +72,37 @@ def get_recent_memories(user_id: int, limit: int = 5):
     return rows
 
 
+def search_memories(user_id: int, query: str, limit: int = 10):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT text, created_at
+        FROM memories
+        WHERE user_id = ?
+        AND LOWER(text) LIKE LOWER(?)
+        ORDER BY id DESC
+        LIMIT ?
+    """, (
+        user_id,
+        f"%{query}%",
+        limit
+    ))
+
+    rows = cursor.fetchall()
+    conn.close()
+
+    return rows
+
+
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     await message.answer(
         "👋 Привет! Я Remindly — твоя вторая память для Telegram.\n\n"
         "Отправь мне любой текст, мысль, ссылку или пересланное сообщение — я сохраню это.\n\n"
         "Команды:\n"
-        "/memory — показать последние сохранения"
+        "/memory — показать последние сохранения\n"
+        "/search запрос — найти сохранения"
     )
 
 
@@ -104,6 +128,43 @@ async def memory_handler(message: Message):
     await message.answer(response)
 
 
+@dp.message(Command("search"))
+async def search_handler(message: Message):
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        await message.answer(
+            "Напиши запрос после команды.\n\n"
+            "Пример:\n"
+            "/search ГЧП"
+        )
+        return
+
+    query = parts[1].strip()
+    results = search_memories(message.from_user.id, query)
+
+    if not results:
+        await message.answer(
+            f"Ничего не нашёл по запросу: «{query}».\n\n"
+            "Пока поиск работает по точному совпадению слов. "
+            "Позже добавим смысловой AI-поиск."
+        )
+        return
+
+    response = f"🔎 Нашёл по запросу: «{query}»\n\n"
+
+    for index, (text, created_at) in enumerate(results, start=1):
+        short_text = text[:300]
+
+        if len(text) > 300:
+            short_text += "..."
+
+        response += f"{index}. {short_text}\n"
+        response += f"   🕒 {created_at}\n\n"
+
+    await message.answer(response)
+
+
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
@@ -118,7 +179,8 @@ async def save_text_handler(message: Message):
 
     await message.answer(
         "✅ Сохранил в память.\n\n"
-        "Чтобы посмотреть последние записи, напиши /memory"
+        "Чтобы посмотреть последние записи, напиши /memory\n"
+        "Чтобы найти запись, напиши /search запрос"
     )
 
 
