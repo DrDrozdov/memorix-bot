@@ -110,7 +110,35 @@ def search_memories(user_id: int, query: str, limit: int = 10):
     conn.close()
 
     return rows
+def ai_search(query: str, memories: str):
+    prompt = f"""
+Ты ищешь по личной памяти пользователя.
 
+Запрос пользователя:
+{query}
+
+Записи памяти:
+{memories}
+
+Выбери только релевантные записи.
+Если ничего нет — так и скажи.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Ты помощник для поиска по личной памяти."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+
+    return response.choices[0].message.content
 
 def format_memory_list(memories, title: str):
     response = f"{title}\n\n"
