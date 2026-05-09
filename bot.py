@@ -122,8 +122,8 @@ def format_memory_list(memories, title: str):
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     await message.answer(
-        "👋 Привет! Я Remindly.\n\n"
-        "Отправь мне текст, ссылку, заметку или пересланное сообщение — я сохраню это в твою личную память.\n\n"
+        "👋 Привет! Я Memorix.\n\n"
+        "Сохраняй мысли, идеи, ссылки и заметки в одном месте — и находи их за секунды.\n\n"
         "Команды:\n"
         "/memory — последние сохранения\n"
         "/search запрос — поиск по сохранениям\n"
@@ -134,7 +134,7 @@ async def start_handler(message: Message):
 @dp.message(Command("help"))
 async def help_handler(message: Message):
     await message.answer(
-        "Как пользоваться Remindly:\n\n"
+        "Как пользоваться Memorix:\n\n"
         "1. Отправь мне любой текст, ссылку или пересланное сообщение.\n"
         "2. Я сохраню его в твою память.\n"
         "3. Чтобы посмотреть последние записи, напиши /memory.\n"
@@ -216,7 +216,7 @@ async def save_text_handler(message: Message):
 
 async def main():
     init_db()
-    print("Remindly started with PostgreSQL")
+    print("Memorix started with PostgreSQL")
     await dp.start_polling(bot)
 
 
