@@ -142,13 +142,23 @@ async def start_handler(message: Message):
 @dp.message(Command("help"))
 async def help_handler(message: Message):
     await message.answer(
-        "Как пользоваться Memorix:\n\n"
-        "• Отправь текст, ссылку или голосовое сообщение.\n"
-        "• Memorix сохранит это в память.\n"
-        "• /memory — последние записи.\n"
-        "• /search запрос — поиск.\n\n"
-        "Пример:\n"
-        "/search идея"
+        HELP_TEXT = """
+🧠 Memorix — персональная память в Telegram.
+
+Просто отправляй:
+• текст
+• голосовые
+• идеи
+• ссылки
+• заметки
+
+Команды:
+/search запрос — AI-поиск по памяти
+/today — что сохранялось сегодня
+/memory — последние записи
+/help — помощь
+"""
+
     )
 
 
@@ -170,29 +180,81 @@ async def memory_handler(message: Message):
 
 @dp.message(Command("search"))
 async def search_handler(message: Message):
-    parts = message.text.split(maxsplit=1)
+    query = message.text.replace("/search", "").strip()
 
-    if len(parts) < 2:
+    if not query:
         await message.answer(
-            "Пример:\n/search идея"
+            "🔎 Напиши запрос после команды.\n\nПример:\n/search аренда квартиры"
         )
         return
 
-    query = parts[1].strip()
-    results = search_memories(message.from_user.id, query)
+    conn = get_connection()
+    cur = conn.cursor()
 
-    if not results:
-        await message.answer(
-            f"Ничего не найдено по запросу: «{query}»."
-        )
-        return
-
-    response = format_memory_list(
-        results,
-        f"🔎 Результаты поиска: «{query}»"
+    cur.execute(
+        """
+        SELECT text, created_at
+        FROM memories
+        WHERE user_id = %s
+        ORDER BY created_at DESC
+        LIMIT 30
+        """,
+        (message.from_user.id,)
     )
 
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    if not rows:
+        await message.answer("🫥 Память пока пустая.")
+        return
+
+    memories = "\n".join([
+        f"[{row[1]}] {row[0]}"
+        for row in rows
+    ])
+
+    result = ai_search(query, memories)
+
+    await message.answer(
+        f"🧠 Результаты поиска\n\n{result}"
+    )
+
+
+@dp.message(Command("today"))
+async def today_handler(message: Message):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        SELECT text, created_at
+        FROM memories
+        WHERE user_id = %s
+        AND DATE(created_at) = CURRENT_DATE
+        ORDER BY created_at DESC
+        """,
+        (message.from_user.id,)
+    )
+
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    if not rows:
+        await message.answer("📭 Сегодня пока ничего не сохранено.")
+        return
+
+    response = "📅 Сохранения за сегодня:\n\n"
+
+    for text, created_at in rows:
+        response += f"• {text}\n"
+
     await message.answer(response)
+
 
 
 @dp.message(lambda message: message.voice)
@@ -256,3 +318,39 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+    from openai import OpenAI
+from datetime import datetime
+
+def ai_search(query, memories):
+    if not memories:
+        return []
+
+    prompt = f"""
+Ты анализируешь личную память пользователя.
+
+Запрос пользователя:
+{query}
+
+Записи памяти:
+{memories}
+
+Найди наиболее релевантные записи.
+Верни только подходящие.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": "Ты помощник для поиска по личной памяти."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+
+    return response.choices[0].message.content
+
