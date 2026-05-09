@@ -1,5 +1,6 @@
 import asyncio
 import os
+import tempfile
 from datetime import datetime
 
 import psycopg2
@@ -7,14 +8,18 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 def get_connection():
@@ -123,7 +128,7 @@ def format_memory_list(memories, title: str):
 async def start_handler(message: Message):
     await message.answer(
         "👋 Привет! Я Memorix.\n\n"
-        "Сохраняй мысли, идеи, ссылки и заметки в одном месте — и находи их за секунды.\n\n"
+        "Сохраняй мысли, идеи, ссылки, заметки и голосовые сообщения в одном месте — и находи их за секунды.\n\n"
         "Команды:\n"
         "/memory — последние сохранения\n"
         "/search запрос — поиск по сохранениям\n"
@@ -135,13 +140,12 @@ async def start_handler(message: Message):
 async def help_handler(message: Message):
     await message.answer(
         "Как пользоваться Memorix:\n\n"
-        "1. Отправь мне любой текст, ссылку или пересланное сообщение.\n"
-        "2. Я сохраню его в твою память.\n"
-        "3. Чтобы посмотреть последние записи, напиши /memory.\n"
-        "4. Чтобы найти нужную запись, напиши /search и запрос.\n\n"
+        "• Отправь текст, ссылку или голосовое сообщение.\n"
+        "• Memorix сохранит это в память.\n"
+        "• /memory — последние записи.\n"
+        "• /search запрос — поиск.\n\n"
         "Пример:\n"
-        "/search договор\n\n"
-        "Пока я сохраняю только текстовые сообщения. Поддержку файлов и голосовых добавим позже."
+        "/search идея"
     )
 
 
@@ -150,10 +154,7 @@ async def memory_handler(message: Message):
     memories = get_recent_memories(message.from_user.id)
 
     if not memories:
-        await message.answer(
-            "Пока ничего не сохранено.\n\n"
-            "Отправь мне текст, ссылку или пересланное сообщение — и я сохраню это."
-        )
+        await message.answer("Пока ничего не сохранено.")
         return
 
     response = format_memory_list(
@@ -170,9 +171,7 @@ async def search_handler(message: Message):
 
     if len(parts) < 2:
         await message.answer(
-            "Напиши запрос после команды.\n\n"
-            "Пример:\n"
-            "/search договор"
+            "Пример:\n/search идея"
         )
         return
 
@@ -187,17 +186,51 @@ async def search_handler(message: Message):
 
     response = format_memory_list(
         results,
-        f"🔎 Результаты поиска по запросу: «{query}»"
+        f"🔎 Результаты поиска: «{query}»"
     )
 
     await message.answer(response)
+
+
+@dp.message(lambda message: message.voice)
+async def voice_handler(message: Message):
+    await message.answer("🎙 Расшифровываю голосовое...")
+
+    voice = message.voice
+
+    file = await bot.get_file(voice.file_id)
+
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+        temp_path = temp_file.name
+
+    await bot.download_file(file.file_path, temp_path)
+
+    with open(temp_path, "rb") as audio_file:
+        transcription = client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file
+        )
+
+    text = transcription.text
+
+    save_memory(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        text=text
+    )
+
+    os.remove(temp_path)
+
+    await message.answer(
+        f"✅ Голосовое сохранено:\n\n{text}"
+    )
 
 
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
         await message.answer(
-            "Пока я умею сохранять только текстовые сообщения."
+            "Пока поддерживаются только текст и голосовые сообщения."
         )
         return
 
@@ -208,15 +241,13 @@ async def save_text_handler(message: Message):
     )
 
     await message.answer(
-        "✅ Сохранено.\n\n"
-        "Посмотреть последние записи: /memory\n"
-        "Найти запись: /search запрос"
+        "✅ Сохранено."
     )
 
 
 async def main():
     init_db()
-    print("Memorix started with PostgreSQL")
+    print("Memorix started")
     await dp.start_polling(bot)
 
 
