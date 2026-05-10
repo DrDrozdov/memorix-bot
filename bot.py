@@ -112,6 +112,26 @@ def search_memories(user_id: int, query: str, limit: int = 10):
     return rows
 
 
+def get_last_memories_for_ai(user_id: int, limit: int = 30):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT text, created_at
+        FROM memories
+        WHERE user_id = %s
+        ORDER BY id DESC
+        LIMIT %s
+    """, (user_id, limit))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
+
+
 def ai_search(query: str, memories: str):
     prompt = f"""
 Ты ищешь по личной памяти пользователя.
@@ -122,7 +142,8 @@ def ai_search(query: str, memories: str):
 Записи памяти:
 {memories}
 
-Выбери только релевантные записи. Ответь кратко и структурно.
+Выбери только релевантные записи.
+Ответь кратко, понятно и структурно.
 Если подходящих записей нет, так и скажи.
 """
 
@@ -141,6 +162,7 @@ def ai_search(query: str, memories: str):
     )
 
     return response.choices[0].message.content
+
 
 def format_memory_list(memories, title: str):
     response = f"{title}\n\n"
@@ -161,10 +183,12 @@ def format_memory_list(memories, title: str):
 async def start_handler(message: Message):
     await message.answer(
         "👋 Привет! Я Memorix.\n\n"
-        "Сохраняй мысли, идеи, ссылки, заметки и голосовые сообщения в одном месте — и находи их за секунды.\n\n"
+        "Сохраняй мысли, идеи, ссылки, заметки и голосовые сообщения в одном месте — "
+        "и находи их за секунды.\n\n"
         "Команды:\n"
         "/memory — последние сохранения\n"
-        "/search запрос — поиск по сохранениям\n"
+        "/search запрос — поиск по памяти\n"
+        "/today — сохранения за сегодня\n"
         "/help — помощь"
     )
 
@@ -186,6 +210,7 @@ async def help_handler(message: Message):
         "/help — помощь"
     )
 
+
 @dp.message(Command("memory"))
 async def memory_handler(message: Message):
     memories = get_recent_memories(message.from_user.id)
@@ -202,42 +227,56 @@ async def memory_handler(message: Message):
     await message.answer(response)
 
 
+@dp.message(Command("today"))
+async def today_handler(message: Message):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT text, created_at
+        FROM memories
+        WHERE user_id = %s
+        AND DATE(created_at) = CURRENT_DATE
+        ORDER BY created_at DESC
+    """, (message.from_user.id,))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        await message.answer("📭 Сегодня пока ничего не сохранено.")
+        return
+
+    response = format_memory_list(
+        rows,
+        "📅 Сохранения за сегодня:"
+    )
+
+    await message.answer(response)
+
+
 @dp.message(Command("search"))
 async def search_handler(message: Message):
     query = message.text.replace("/search", "").strip()
 
     if not query:
         await message.answer(
-            "🔎 Напиши запрос после команды.\n\nПример:\n/search аренда квартиры"
+            "🔎 Напиши запрос после команды.\n\n"
+            "Пример:\n/search идея"
         )
         return
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT text, created_at
-        FROM memories
-        WHERE user_id = %s
-        ORDER BY created_at DESC
-        LIMIT 30
-        """,
-        (message.from_user.id,)
-    )
-
-    rows = cur.fetchall()
-
-    cur.close()
-    conn.close()
+    rows = get_last_memories_for_ai(message.from_user.id)
 
     if not rows:
         await message.answer("🫥 Память пока пустая.")
         return
 
     memories = "\n".join([
-        f"[{row[1]}] {row[0]}"
-        for row in rows
+        f"[{created_at.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
+        for text, created_at in rows
     ])
 
     result = ai_search(query, memories)
@@ -247,72 +286,55 @@ async def search_handler(message: Message):
     )
 
 
-@dp.message(Command("today"))
-async def today_handler(message: Message):
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT text, created_at
-        FROM memories
-        WHERE user_id = %s
-        AND DATE(created_at) = CURRENT_DATE
-        ORDER BY created_at DESC
-        """,
-        (message.from_user.id,)
-    )
-
-    rows = cur.fetchall()
-
-    cur.close()
-    conn.close()
-
-    if not rows:
-        await message.answer("📭 Сегодня пока ничего не сохранено.")
-        return
-
-    response = "📅 Сохранения за сегодня:\n\n"
-
-    for text, created_at in rows:
-        response += f"• {text}\n"
-
-    await message.answer(response)
-
-
-
 @dp.message(lambda message: message.voice)
 async def voice_handler(message: Message):
-    await message.answer("🎙 Расшифровываю голосовое...")
+    status_message = await message.answer("🎙 Расшифровываю голосовое...")
 
-    voice = message.voice
+    temp_path = None
 
-    file = await bot.get_file(voice.file_id)
+    try:
+        voice = message.voice
+        file = await bot.get_file(voice.file_id)
 
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
-        temp_path = temp_file.name
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+            temp_path = temp_file.name
 
-    await bot.download_file(file.file_path, temp_path)
+        await bot.download_file(file.file_path, temp_path)
 
-    with open(temp_path, "rb") as audio_file:
-        transcription = client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file
+        with open(temp_path, "rb") as audio_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="ru"
+            )
+
+        text = transcription.text.strip()
+
+        if not text:
+            await status_message.edit_text(
+                "Не получилось распознать голосовое. Попробуй записать чуть громче."
+            )
+            return
+
+        save_memory(
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            text=text
         )
 
-    text = transcription.text
+        await status_message.edit_text(
+            f"✅ Голосовое сохранено:\n\n{text}"
+        )
 
-    save_memory(
-        user_id=message.from_user.id,
-        username=message.from_user.username,
-        text=text
-    )
+    except Exception as error:
+        print(f"Voice transcription error: {error}")
+        await status_message.edit_text(
+            "Не получилось расшифровать голосовое. Попробуй ещё раз."
+        )
 
-    os.remove(temp_path)
-
-    await message.answer(
-        f"✅ Голосовое сохранено:\n\n{text}"
-    )
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 @dp.message()
@@ -329,9 +351,7 @@ async def save_text_handler(message: Message):
         text=message.text
     )
 
-    await message.answer(
-        "✅ Сохранено."
-    )
+    await message.answer("✅ Сохранено.")
 
 
 async def main():
@@ -342,39 +362,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    from openai import OpenAI
-from datetime import datetime
-
-def ai_search(query, memories):
-    if not memories:
-        return []
-
-    prompt = f"""
-Ты анализируешь личную память пользователя.
-
-Запрос пользователя:
-{query}
-
-Записи памяти:
-{memories}
-
-Найди наиболее релевантные записи.
-Верни только подходящие.
-"""
-
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": "Ты помощник для поиска по личной памяти."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
-    )
-
-    return response.choices[0].message.content
-
