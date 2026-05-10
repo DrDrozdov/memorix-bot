@@ -258,6 +258,22 @@ def get_recent_memories(user_id: int, limit: int = 5):
 
     return rows
 
+def delete_all_memories(user_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM memories
+        WHERE user_id = %s
+    """, (user_id,))
+
+    deleted_count = cursor.rowcount
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return deleted_count
 
 def search_memories(user_id: int, query: str, limit: int = 10):
     conn = get_connection()
@@ -946,6 +962,7 @@ async def help_handler(message: Message):
         "/memory — последние записи\n"
         "/today — сохранения за сегодня\n"
         "/search запрос — AI-поиск\n"
+        "/reset — удалить всю память\n"
         "/help — помощь"
     )
 
@@ -994,6 +1011,53 @@ async def today_handler(message: Message):
     )
 
     await message.answer(response)
+
+@dp.message(Command("reset"))
+async def reset_handler(message: Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Да, удалить память",
+                    callback_data="confirm_reset"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data="cancel_reset"
+                )
+            ]
+        ]
+    )
+
+    await message.answer(
+        "⚠️ Сброс памяти\n\n"
+        "Это действие полностью удалит все твои сохранённые записи в Memorix.\n\n"
+        "Восстановить их после удаления будет нельзя.\n\n"
+        "Точно удалить всю память?",
+        reply_markup=keyboard
+    )
+
+    @dp.callback_query(lambda callback: callback.data == "confirm_reset")
+async def confirm_reset_handler(callback: CallbackQuery):
+    deleted_count = delete_all_memories(callback.from_user.id)
+
+    await callback.message.edit_text(
+        f"🗑 Память очищена.\n\n"
+        f"Удалено записей: {deleted_count}"
+    )
+
+    await callback.answer()
+
+
+@dp.callback_query(lambda callback: callback.data == "cancel_reset")
+async def cancel_reset_handler(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "Отмена. Память осталась без изменений."
+    )
+
+    await callback.answer()
 
 @dp.message(Command("search"))
 async def search_handler(message: Message):
@@ -1293,6 +1357,7 @@ async def main():
     BotCommand(command="memory", description="Последние сохранения"),
     BotCommand(command="search", description="AI-поиск по памяти"),
     BotCommand(command="today", description="Сохранения за сегодня"),
+    BotCommand(command="reset", description="Сбросить память"),
     BotCommand(command="help", description="Помощь")
 ])
     print("Memorix started | VERSION: SEARCH_UI_FIX_002")
