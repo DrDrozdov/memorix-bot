@@ -356,7 +356,7 @@ async def save_text_handler(message: Message):
 
 async def main():
     init_db()
-    print("Memorix started")
+    print("Memorix started | VERSION: CLEAN_HELP_FIX_001")
     await dp.start_polling(bot)
 
 
