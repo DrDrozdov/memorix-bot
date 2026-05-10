@@ -110,6 +110,8 @@ def search_memories(user_id: int, query: str, limit: int = 10):
     conn.close()
 
     return rows
+
+
 def ai_search(query: str, memories: str):
     prompt = f"""
 Ты ищешь по личной памяти пользователя.
@@ -120,8 +122,8 @@ def ai_search(query: str, memories: str):
 Записи памяти:
 {memories}
 
-Выбери только релевантные записи.
-Если ничего нет — так и скажи.
+Выбери только релевантные записи. Ответь кратко и структурно.
+Если подходящих записей нет, так и скажи.
 """
 
     response = client.chat.completions.create(
@@ -129,7 +131,7 @@ def ai_search(query: str, memories: str):
         messages=[
             {
                 "role": "system",
-                "content": "Ты помощник для поиска по личной памяти."
+                "content": "Ты помощник для поиска по личной памяти пользователя."
             },
             {
                 "role": "user",
@@ -170,25 +172,19 @@ async def start_handler(message: Message):
 @dp.message(Command("help"))
 async def help_handler(message: Message):
     await message.answer(
-        HELP_TEXT = """
-🧠 Memorix — персональная память в Telegram.
-
-Просто отправляй:
-• текст
-• голосовые
-• идеи
-• ссылки
-• заметки
-
-Команды:
-/search запрос — AI-поиск по памяти
-/today — что сохранялось сегодня
-/memory — последние записи
-/help — помощь
-"""
-
+        "🧠 Memorix — персональная память в Telegram.\n\n"
+        "Просто отправляй:\n"
+        "• текст\n"
+        "• голосовые\n"
+        "• идеи\n"
+        "• ссылки\n"
+        "• заметки\n\n"
+        "Команды:\n"
+        "/search запрос — AI-поиск по памяти\n"
+        "/today — что сохранялось сегодня\n"
+        "/memory — последние записи\n"
+        "/help — помощь"
     )
-
 
 @dp.message(Command("memory"))
 async def memory_handler(message: Message):
