@@ -180,7 +180,7 @@ def format_memory_list(memories, title: str):
         response += f"{index}. {short_text}\n"
         response += f"   🕒 {moscow_time.strftime('%Y-%m-%d %H:%M:%S')} МСК\n\n"
 
-    return response
+    return response 
 
 
 @dp.message(Command("start"))
