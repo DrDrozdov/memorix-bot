@@ -1208,18 +1208,13 @@ async def save_text_handler(message: Message):
         )
         return
 
-        metadata = save_memory(
-            user_id=message.from_user.id,
-            username=message.from_user.username,
-            text=message.text
-        )
+    save_memory(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        text=message.text
+    )
 
-        await message.answer(
-            "✅ Сохранено.\n\n"
-            f"{metadata['category']}\n"
-            f"{metadata['content_type']}\n"
-            f"🏷 {format_tags(metadata['tags'])}"
-        )
+    await message.answer("✅ Сохранено.")
 
 
 async def main():
