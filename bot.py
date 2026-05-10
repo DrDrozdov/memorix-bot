@@ -175,12 +175,24 @@ def format_tags(tags):
         except Exception:
             tags = [tags]
 
-        limited_tags = tags[:3]
+    if not isinstance(tags, list):
+        tags = [str(tags)]
 
-    return " ".join(
-        f"#{tag.replace(' ', '').replace('-', '')}"
-        for tag in limited_tags
-    )
+    clean_tags = []
+
+    for tag in tags:
+        tag = str(tag).strip().lower()
+        tag = tag.replace(" ", "").replace("-", "")
+
+        if tag and tag not in clean_tags:
+            clean_tags.append(tag)
+
+    limited_tags = clean_tags[:3]
+
+    if not limited_tags:
+        return ""
+
+    return " ".join(f"#{tag}" for tag in limited_tags)
 
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
