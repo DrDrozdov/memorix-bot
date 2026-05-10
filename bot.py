@@ -1,7 +1,7 @@
 import asyncio
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import psycopg2
 from aiogram import Bot, Dispatcher
@@ -24,6 +24,8 @@ client = OpenAI(
     base_url="https://api.aitunnel.ru/v1/"
 )
 
+def to_moscow_time(dt):
+    return dt + timedelta(hours=3)
 
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
@@ -174,7 +176,8 @@ def format_memory_list(memories, title: str):
             short_text += "..."
 
         response += f"{index}. {short_text}\n"
-        response += f"   🕒 {created_at.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        moscow_time = to_moscow_time(created_at)
+response += f"   🕒 {moscow_time.strftime('%Y-%m-%d %H:%M:%S')} МСК\n\n"
 
     return response
 
@@ -275,9 +278,10 @@ async def search_handler(message: Message):
         return
 
     memories = "\n".join([
-        f"[{created_at.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
-        for text, created_at in rows
-    ])
+    f"[{to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК] {text}"
+    for text, created_at in rows
+])
+
 
     result = ai_search(query, memories)
 
