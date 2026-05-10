@@ -182,6 +182,57 @@ def ai_search(query: str, memories: str):
 
     return response.choices[0].message.content
 
+def is_natural_search_query(text: str) -> bool:
+    text_lower = text.lower().strip()
+
+    search_triggers = [
+        "найди",
+        "поищи",
+        "покажи",
+        "что я сохранял",
+        "что у меня есть",
+        "есть ли у меня",
+        "напомни, что",
+        "напомни что",
+        "вспомни",
+        "найдешь",
+        "найдёшь",
+        "где у меня",
+        "что было про",
+        "что есть про"
+    ]
+
+    return any(trigger in text_lower for trigger in search_triggers)
+
+def clean_search_query(text: str) -> str:
+    text_lower = text.lower().strip()
+
+    phrases_to_remove = [
+        "найди",
+        "поищи",
+        "покажи",
+        "что я сохранял",
+        "что у меня есть",
+        "есть ли у меня",
+        "напомни, что",
+        "напомни что",
+        "вспомни",
+        "где у меня",
+        "что было про",
+        "что есть про"
+    ]
+
+    query = text_lower
+
+    for phrase in phrases_to_remove:
+        query = query.replace(phrase, "")
+
+    query = query.strip(" .,!?:;—-")
+
+    if not query:
+        return text
+
+    return query
 
 def format_memory_list(memories, title: str):
     response = f"{title}\n\n"
@@ -218,17 +269,22 @@ async def start_handler(message: Message):
 @dp.message(Command("help"))
 async def help_handler(message: Message):
     await message.answer(
-        "🧠 Memorix — персональная память в Telegram.\n\n"
-        "Просто отправляй:\n"
-        "• текст\n"
+        "🧠 Memorix — персональная AI-память в Telegram.\n\n"
+        "Сохраняй:\n"
+        "• мысли\n"
         "• голосовые\n"
-        "• идеи\n"
         "• ссылки\n"
+        "• идеи\n"
         "• заметки\n\n"
+        "Как искать:\n"
+        "• /search запрос\n"
+        "• кнопка 🔍 Поиск\n"
+        "• или просто напиши:\n"
+        "«найди заметку про бренд»\n\n"
         "Команды:\n"
-        "/search запрос — AI-поиск по памяти\n"
-        "/today — что сохранялось сегодня\n"
         "/memory — последние записи\n"
+        "/today — сохранения за сегодня\n"
+        "/search запрос — AI-поиск\n"
         "/help — помощь"
     )
 
@@ -378,6 +434,26 @@ async def help_button_handler(message: Message):
 async def search_button_handler(message: Message):
     await message.answer(
         "Напиши:\n/search твой запрос"
+    )
+@dp.message(lambda message: message.text and is_natural_search_query(message.text))
+async def natural_search_handler(message: Message):
+    query = clean_search_query(message.text)
+
+    rows = get_last_memories_for_ai(message.from_user.id)
+
+    if not rows:
+        await message.answer("🫥 Память пока пустая.")
+        return
+
+    memories = "\n".join([
+        f"[{to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК] {text}"
+        for text, created_at in rows
+    ])
+
+    result = ai_search(query, memories)
+
+    await message.answer(
+        f"🧠 Нашёл по запросу: «{query}»\n\n{result}"
     )
 @dp.message()
 async def save_text_handler(message: Message):
