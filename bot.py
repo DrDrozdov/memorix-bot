@@ -802,9 +802,9 @@ async def natural_search_handler(message: Message):
         for text, created_at in rows
     ])
 
-        result = ai_search(query, memories)
+    result = ai_search(query, memories)
 
-        await message.answer(result)
+    await message.answer(result)
 
 @dp.message()
 async def save_text_handler(message: Message):
