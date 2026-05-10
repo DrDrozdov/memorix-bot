@@ -831,7 +831,7 @@ async def main():
     BotCommand(command="today", description="Сохранения за сегодня"),
     BotCommand(command="help", description="Помощь")
 ])
-    print("Memorix started | VERSION: CLEAN_HELP_FIX_001")
+    print("Memorix started | VERSION: SEARCH_UI_FIX_002")
     await dp.start_polling(bot)
 
 
