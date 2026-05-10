@@ -175,9 +175,10 @@ def format_memory_list(memories, title: str):
         if len(text) > 300:
             short_text += "..."
 
-        response += f"{index}. {short_text}\n"
         moscow_time = to_moscow_time(created_at)
-response += f"   🕒 {moscow_time.strftime('%Y-%m-%d %H:%M:%S')} МСК\n\n"
+
+        response += f"{index}. {short_text}\n"
+        response += f"   🕒 {moscow_time.strftime('%Y-%m-%d %H:%M:%S')} МСК\n\n"
 
     return response
 
