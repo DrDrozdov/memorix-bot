@@ -714,9 +714,7 @@ async def search_handler(message: Message):
 
     result = ai_search(query, memories)
 
-    await message.answer(
-        f"🧠 Результаты поиска\n\n{result}"
-    )
+    await message.answer(result)
 
 
 @dp.message(lambda message: message.voice)
@@ -806,9 +804,8 @@ async def natural_search_handler(message: Message):
 
     result = ai_search(query, memories)
 
-    await message.answer(
-        f"🧠 Нашёл по запросу: «{query}»\n\n{result}"
-    )
+   await message.answer(result)
+
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
