@@ -49,6 +49,134 @@ client = OpenAI(
 def to_moscow_time(dt):
     return dt + timedelta(hours=3)
 
+def detect_content_type(text: str) -> str:
+    text_lower = text.lower()
+
+    if "http://" in text_lower or "https://" in text_lower or "www." in text_lower:
+        return "🔗 ссылка"
+
+    return "📝 текст"
+
+
+def generate_memory_metadata(text: str):
+    content_type = detect_content_type(text)
+
+    prompt = f"""
+Проанализируй запись пользователя и верни метаданные для системы личной памяти.
+
+Запись:
+{text}
+
+Выбери одну категорию строго из списка:
+💼 Работа
+📚 Учёба
+🚗 Авто
+💰 Финансы
+🎨 Дизайн
+💻 Техника
+🧠 Идеи
+🏠 Быт
+🔒 Приватное
+🔗 Материалы
+📦 Разное
+
+Правила:
+- category — только одна категория из списка;
+- content_type уже определён как: {content_type};
+- tags — 2–5 коротких тегов на русском;
+- теги без пробелов, без # внутри JSON;
+- не придумывай факты, которых нет в записи;
+- если запись содержит ссылку, чаще всего выбирай 🔗 Материалы, если нет более точной категории;
+- если запись личная, приватная, про планы, отношения, здоровье, внутренние мысли — выбирай 🔒 Приватное;
+- если запись не подходит никуда — выбирай 📦 Разное.
+
+Верни строго JSON:
+{{
+  "category": "🚗 Авто",
+  "content_type": "{content_type}",
+  "tags": ["покупка", "расходы", "ауди"]
+}}
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты классификатор заметок. Возвращай только валидный JSON."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        content = response.choices[0].message.content.strip()
+        metadata = json.loads(content)
+
+        allowed_categories = [
+            "💼 Работа",
+            "📚 Учёба",
+            "🚗 Авто",
+            "💰 Финансы",
+            "🎨 Дизайн",
+            "💻 Техника",
+            "🧠 Идеи",
+            "🏠 Быт",
+            "🔒 Приватное",
+            "🔗 Материалы",
+            "📦 Разное"
+        ]
+
+        category = metadata.get("category", "📦 Разное")
+
+        if category not in allowed_categories:
+            category = "📦 Разное"
+
+        tags = metadata.get("tags", [])
+
+        if not isinstance(tags, list):
+            tags = []
+
+        tags = [
+            str(tag).lower().strip().replace("#", "").replace(" ", "_")
+            for tag in tags
+            if str(tag).strip()
+        ][:5]
+
+        if not tags:
+            tags = ["разное"]
+
+        return {
+            "category": category,
+            "content_type": content_type,
+            "tags": tags
+        }
+
+    except Exception as error:
+        print(f"Metadata generation error: {error}")
+
+        return {
+            "category": "🔗 Материалы" if content_type == "🔗 ссылка" else "📦 Разное",
+            "content_type": content_type,
+            "tags": ["разное"]
+        }
+
+
+def format_tags(tags):
+    if not tags:
+        return ""
+
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except Exception:
+            tags = [tags]
+
+    return " ".join([f"#{tag}" for tag in tags])
+
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
@@ -66,29 +194,49 @@ def init_db():
             created_at TIMESTAMP NOT NULL
         )
     """)
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS category TEXT DEFAULT '📦 Разное'
+    """)
 
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS content_type TEXT DEFAULT '📝 текст'
+    """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT '[]'
+    """)
     conn.commit()
     cursor.close()
     conn.close()
 
 
 def save_memory(user_id: int, username: str | None, text: str):
+    metadata = generate_memory_metadata(text)
+
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO memories (user_id, username, text, created_at)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO memories (user_id, username, text, created_at, category, content_type, tags)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """, (
         user_id,
         username,
         text,
-        datetime.now()
+        datetime.now(),
+        metadata["category"],
+        metadata["content_type"],
+        json.dumps(metadata["tags"], ensure_ascii=False)
     ))
 
     conn.commit()
     cursor.close()
     conn.close()
+
+    return metadata
 
 
 def get_recent_memories(user_id: int, limit: int = 5):
@@ -96,12 +244,12 @@ def get_recent_memories(user_id: int, limit: int = 5):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT text, created_at
-        FROM memories
-        WHERE user_id = %s
-        ORDER BY id DESC
-        LIMIT %s
-    """, (user_id, limit))
+    SELECT id, text, created_at, category, content_type, tags
+    FROM memories
+    WHERE user_id = %s
+    ORDER BY id DESC
+    LIMIT %s
+""", (user_id, limit))
 
     rows = cursor.fetchall()
 
@@ -116,7 +264,7 @@ def search_memories(user_id: int, query: str, limit: int = 10):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT text, created_at
+        SELECT id, text, created_at, category, content_type, tags
         FROM memories
         WHERE user_id = %s
         AND text ILIKE %s
@@ -141,7 +289,7 @@ def get_last_memories_for_ai(user_id: int, limit: int = 30):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, text, created_at
+        SELECT id, text, created_at, category, content_type, tags
         FROM memories
         WHERE user_id = %s
         ORDER BY id DESC
@@ -244,14 +392,21 @@ def guess_memory_emoji(text: str):
 def build_search_response(selected_rows):
     response = f"🧠 Нашёл {len(selected_rows)} записи\n\n"
 
-    for index, (memory_id, text, created_at) in enumerate(selected_rows, start=1):
-        emoji = guess_memory_emoji(text)
+    for index, row in enumerate(selected_rows, start=1):
+        memory_id, text, created_at, category, content_type, tags = row
+
         preview = make_memory_preview(text)
         date_text = format_moscow_datetime(created_at)
+        tag_text = format_tags(tags)
 
-        response += f"{index}. {emoji} Запись из памяти\n"
-        response += f"🕒 {date_text}\n\n"
-        response += f"{preview}\n\n"
+        response += f"{index}. {category} Запись из памяти\n"
+        response += f"🕒 {date_text}\n"
+        response += f"{content_type}\n"
+
+        if tag_text:
+            response += f"{tag_text}\n"
+
+        response += f"\n{preview}\n\n"
 
     return response.strip()
 
@@ -259,7 +414,9 @@ def build_search_response(selected_rows):
 def build_search_keyboard(selected_rows):
     keyboard = []
 
-    for index, (memory_id, text, created_at) in enumerate(selected_rows, start=1):
+    for index, row in enumerate(selected_rows, start=1):
+        memory_id = row[0]
+
         keyboard.append([
             InlineKeyboardButton(
                 text=f"📄 {index} полностью",
@@ -655,18 +812,27 @@ def clean_search_query(text: str) -> str:
 def format_memory_list(memories, title: str):
     response = f"{title}\n\n"
 
-    for index, (text, created_at) in enumerate(memories, start=1):
+    for index, row in enumerate(memories, start=1):
+        memory_id, text, created_at, category, content_type, tags = row
+
         short_text = text[:300]
 
         if len(text) > 300:
             short_text += "..."
 
         moscow_time = to_moscow_time(created_at)
+        tag_text = format_tags(tags)
 
-        response += f"{index}. {short_text}\n"
-        response += f"   🕒 {moscow_time.strftime('%Y-%m-%d %H:%M:%S')} МСК\n\n"
+        response += f"{index}. {category} {short_text}\n"
+        response += f"   🕒 {moscow_time.strftime('%Y-%m-%d %H:%M:%S')} МСК\n"
+        response += f"   {content_type}\n"
 
-    return response 
+        if tag_text:
+            response += f"   {tag_text}\n"
+
+        response += "\n"
+
+    return response
 
 
 @dp.message(Command("start"))
@@ -688,17 +854,24 @@ async def start_handler(message: Message):
 async def help_handler(message: Message):
     await message.answer(
         "🧠 Memorix — персональная AI-память в Telegram.\n\n"
-        "Сохраняй:\n"
-        "• мысли\n"
-        "• голосовые\n"
-        "• ссылки\n"
-        "• идеи\n"
-        "• заметки\n\n"
+        "Сохраняй текст, голосовые, ссылки, идеи и заметки. "
+        "Memorix сам определит категорию, тип записи и теги.\n\n"
         "Как искать:\n"
         "• /search запрос\n"
         "• кнопка 🔍 Поиск\n"
-        "• или просто напиши:\n"
-        "«найди заметку про бренд»\n\n"
+        "• или просто напиши: «найди заметку про бренд»\n\n"
+        "Категории:\n"
+        "💼 Работа — задачи, встречи, проекты\n"
+        "📚 Учёба — лекции, задания, источники\n"
+        "🚗 Авто — машины, расходы, обслуживание\n"
+        "💰 Финансы — деньги, бюджет, покупки\n"
+        "🎨 Дизайн — визуал, бренд, оформление\n"
+        "💻 Техника — устройства, сервисы, приложения\n"
+        "🧠 Идеи — мысли, планы, концепции\n"
+        "🏠 Быт — дом, дела, повседневное\n"
+        "🔒 Приватное — личные заметки и планы\n"
+        "🔗 Материалы — ссылки, статьи, документы\n"
+        "📦 Разное — всё, что не подошло выше\n\n"
         "Команды:\n"
         "/memory — последние записи\n"
         "/today — сохранения за сегодня\n"
@@ -729,7 +902,7 @@ async def today_handler(message: Message):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT text, created_at
+        SELECT id, text, created_at, category, content_type, tags
         FROM memories
         WHERE user_id = %s
         AND DATE(created_at) = CURRENT_DATE
@@ -752,6 +925,49 @@ async def today_handler(message: Message):
 
     await message.answer(response)
 
+@dp.message(Command("search"))
+async def search_handler(message: Message):
+    query = message.text.replace("/search", "").strip()
+
+    if not query:
+        await message.answer(
+            "🔎 Напиши запрос после команды.\n\n"
+            "Пример:\n/search идея"
+        )
+        return
+
+    rows = get_last_memories_for_ai(message.from_user.id)
+
+    if not rows:
+        await message.answer("😶 Память пока пустая.")
+        return
+
+    memories = "\n".join([
+        f"ID: {row[0]} | DATE: {to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК | CATEGORY: {row[3]} | TYPE: {row[4]} | TAGS: {format_tags(row[5])} | TEXT: {row[1]}"
+        for row in rows
+    ])
+
+    selected_ids = ai_select_memory_ids(query, memories)
+
+    row_map = {
+        row[0]: row
+        for row in rows
+    }
+
+    selected_rows = [
+        row_map[memory_id]
+        for memory_id in selected_ids
+        if memory_id in row_map
+    ]
+
+    if not selected_rows:
+        await message.answer("Ничего релевантного не нашёл.")
+        return
+
+    await message.answer(
+        build_search_response(selected_rows),
+        reply_markup=build_search_keyboard(selected_rows)
+    )
 
 @dp.message(lambda message: message.text and is_natural_search_query(message.text))
 async def natural_search_handler(message: Message):
@@ -764,15 +980,15 @@ async def natural_search_handler(message: Message):
         return
 
     memories = "\n".join([
-        f"ID: {memory_id} | DATE: {to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК | TEXT: {text}"
-        for memory_id, text, created_at in rows
+        f"ID: {row[0]} | DATE: {to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК | CATEGORY: {row[3]} | TYPE: {row[4]} | TAGS: {format_tags(row[5])} | TEXT: {row[1]}"
+        for row in rows
     ])
 
     selected_ids = ai_select_memory_ids(query, memories)
 
     row_map = {
-        memory_id: (memory_id, text, created_at)
-        for memory_id, text, created_at in rows
+        row[0]: row
+        for row in rows
     }
 
     selected_rows = [
@@ -831,15 +1047,15 @@ async def voice_handler(message: Message):
                 return
 
             memories = "\n".join([
-                f"ID: {memory_id} | DATE: {to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК | TEXT: {memory_text}"
-                for memory_id, memory_text, created_at in rows
+                f"ID: {row[0]} | DATE: {to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК | CATEGORY: {row[3]} | TYPE: {row[4]} | TAGS: {format_tags(row[5])} | TEXT: {row[1]}"
+                for row in rows
             ])
 
             selected_ids = ai_select_memory_ids(query, memories)
 
             row_map = {
-                memory_id: (memory_id, memory_text, created_at)
-                for memory_id, memory_text, created_at in rows
+                row[0]: row
+                for row in rows
             }
 
             selected_rows = [
@@ -863,14 +1079,18 @@ async def voice_handler(message: Message):
 
             return
 
-        save_memory(
+        metadata = save_memory(
             user_id=message.from_user.id,
             username=message.from_user.username,
             text=text
         )
 
         await status_message.edit_text(
-            f"✅ Голосовое сохранено:\n\n{text}"
+            f"✅ Голосовое сохранено.\n\n"
+            f"{metadata['category']}\n"
+            f"{metadata['content_type']}\n"
+            f"🏷 {format_tags(metadata['tags'])}\n\n"
+            f"{text}"
         )
 
     except Exception as error:
@@ -903,31 +1123,14 @@ async def search_button_handler(message: Message):
     await message.answer(
         "Напиши:\n/search твой запрос"
     )
-@dp.message(lambda message: message.text and is_natural_search_query(message.text))
-async def natural_search_handler(message: Message):
-    query = clean_search_query(message.text)
 
-    rows = get_last_memories_for_ai(message.from_user.id)
-
-    if not rows:
-        await message.answer("😶 Память пока пустая.")
-        return
-
-    memories = "\n".join([
-        f"[{to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК] {text}"
-        for text, created_at in rows
-    ])
-
-    result = ai_search(query, memories)
-
-    await message.answer(result)
 
 def get_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, text, created_at
+        SELECT id, text, created_at, category, content_type, tags
         FROM memories
         WHERE user_id = %s AND id = %s
     """, (user_id, memory_id))
@@ -938,7 +1141,6 @@ def get_memory_by_id(user_id: int, memory_id: int):
     conn.close()
 
     return row
-
 
 def delete_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
@@ -959,19 +1161,25 @@ def delete_memory_by_id(user_id: int, memory_id: int):
 
 
 @dp.callback_query(lambda callback: callback.data.startswith("full:"))
-async def full_memory_callback(callback: CallbackQuery):
+async def full_memory_handler(callback: CallbackQuery):
     memory_id = int(callback.data.split(":")[1])
 
-    row = get_memory_by_id(callback.from_user.id, memory_id)
+    row = get_memory_by_id(
+        callback.from_user.id,
+        memory_id
+    )
 
     if not row:
-        await callback.answer("Запись не найдена.", show_alert=True)
+        await callback.answer("Запись не найдена.")
         return
 
-    memory_id, text, created_at = row
+    memory_id, text, created_at, category, content_type, tags = row
 
     await callback.message.answer(
         f"📄 Полная запись\n"
+        f"{category}\n"
+        f"{content_type}\n"
+        f"🏷 {format_tags(tags)}\n"
         f"🕒 {format_moscow_datetime(created_at)}\n\n"
         f"{text}"
     )
@@ -1000,13 +1208,18 @@ async def save_text_handler(message: Message):
         )
         return
 
-    save_memory(
-        user_id=message.from_user.id,
-        username=message.from_user.username,
-        text=message.text
-    )
+        metadata = save_memory(
+            user_id=message.from_user.id,
+            username=message.from_user.username,
+            text=message.text
+        )
 
-    await message.answer("✅ Сохранено.")
+        await message.answer(
+            "✅ Сохранено.\n\n"
+            f"{metadata['category']}\n"
+            f"{metadata['content_type']}\n"
+            f"🏷 {format_tags(metadata['tags'])}"
+        )
 
 
 async def main():
