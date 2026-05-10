@@ -1343,16 +1343,16 @@ async def save_text_handler(message: Message):
         )
         return
 
-    save_memory(
+    metadata = save_memory(
         user_id=message.from_user.id,
         username=message.from_user.username,
         text=message.text
     )
 
-   await message.answer(
-    "✅ Сохранено.\n\n"
-    f"{format_tags(metadata['tags'])}"
-)
+    await message.answer(
+        "✅ Сохранено.\n\n"
+        f"{format_tags(metadata['tags'])}"
+    )
 
 
 async def main():
