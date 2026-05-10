@@ -1039,7 +1039,8 @@ async def reset_handler(message: Message):
         reply_markup=keyboard
     )
 
-    @dp.callback_query(lambda callback: callback.data == "confirm_reset")
+
+@dp.callback_query(lambda callback: callback.data == "confirm_reset")
 async def confirm_reset_handler(callback: CallbackQuery):
     deleted_count = delete_all_memories(callback.from_user.id)
 
