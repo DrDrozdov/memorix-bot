@@ -1,6 +1,8 @@
 import asyncio
 import os
 import tempfile
+import json
+import re
 from datetime import datetime, timedelta
 
 import psycopg2
@@ -10,7 +12,10 @@ from aiogram.types import (
     Message,
     BotCommand,
     ReplyKeyboardMarkup,
-    KeyboardButton
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery
 )
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -136,7 +141,7 @@ def get_last_memories_for_ai(user_id: int, limit: int = 30):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT text, created_at
+        SELECT id, text, created_at
         FROM memories
         WHERE user_id = %s
         ORDER BY id DESC
@@ -151,9 +156,9 @@ def get_last_memories_for_ai(user_id: int, limit: int = 30):
     return rows
 
 
-def ai_search(query: str, memories: str):
+def ai_select_memory_ids(query: str, memories: str):
     prompt = f"""
-Ты ищешь по личной памяти пользователя.
+Ты выбираешь релевантные записи из личной памяти пользователя.
 
 Запрос пользователя:
 {query}
@@ -161,33 +166,14 @@ def ai_search(query: str, memories: str):
 Записи памяти:
 {memories}
 
-Твоя задача:
-- выбрать только релевантные записи;
-- не придумывать факты, которых нет в записях;
-- не добавлять внешнюю информацию;
-- к каждой найденной записи обязательно указать дату и время сохранения;
-- дату и время брать только из квадратных скобок перед записью;
-- оформить ответ удобно для чтения в Telegram.
-
-Формат ответа:
-
-🧠 Нашёл N записей
-
-1. [эмодзи по смыслу] Короткий заголовок
-🕒 дата в формате: 10 мая, 15:13 МСК
-Краткое содержание найденной записи в 1–2 предложениях.
-
-2. [эмодзи по смыслу] Короткий заголовок
-🕒 дата в формате: 10 мая, 15:13 МСК
-Краткое содержание найденной записи в 1–2 предложениях.
-
 Правила:
-- не используй технический timestamp в формате 2026-05-10 15:13:00;
-- не используй квадратные скобки для даты в ответе;
-- не пиши слишком длинно;
-- не выводи нерелевантные записи;
-- если подходящих записей нет, ответь: «Ничего релевантного не нашёл.»;
-- если записей больше трёх, покажи только три самые релевантные.
+- выбери только реально релевантные записи;
+- не придумывай новые факты;
+- верни максимум 3 записи;
+- ответь ТОЛЬКО JSON-массивом ID.
+
+Пример ответа:
+[12, 8, 3]
 """
 
     response = client.chat.completions.create(
@@ -195,10 +181,7 @@ def ai_search(query: str, memories: str):
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "Ты точный AI-поисковик по личной памяти. "
-                    "Ты не фантазируешь, не добавляешь факты от себя и всегда сохраняешь дату найденной записи."
-                )
+                "content": "Ты точный поисковый классификатор. Возвращай только JSON-массив ID."
             },
             {
                 "role": "user",
@@ -207,7 +190,88 @@ def ai_search(query: str, memories: str):
         ]
     )
 
-    return response.choices[0].message.content
+    content = response.choices[0].message.content.strip()
+
+    try:
+        ids = json.loads(content)
+    except Exception:
+        match = re.search(r"\[[\d,\s]+\]", content)
+        if not match:
+            return []
+        ids = json.loads(match.group(0))
+
+    return [int(item) for item in ids][:3]
+
+def format_moscow_datetime(created_at):
+    months = [
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря"
+    ]
+
+    dt = to_moscow_time(created_at)
+
+    return f"{dt.day} {months[dt.month - 1]}, {dt.strftime('%H:%M')} МСК"
+
+
+def make_memory_preview(text: str, limit: int = 180):
+    if len(text) <= limit:
+        return text
+
+    return text[:limit].strip() + "..."
+
+
+def guess_memory_emoji(text: str):
+    text_lower = text.lower()
+
+    if any(word in text_lower for word in ["ноутбук", "компьютер", "macbook", "thinkpad", "zenbook"]):
+        return "💻"
+
+    if any(word in text_lower for word in ["машина", "авто", "ауди", "bmw", "kia", "hyundai"]):
+        return "🚗"
+
+    if any(word in text_lower for word in ["деньги", "расходы", "бюджет", "финансы"]):
+        return "💰"
+
+    if any(word in text_lower for word in ["дизайн", "бренд", "логотип", "визуал"]):
+        return "🎨"
+
+    if any(word in text_lower for word in ["учёба", "универ", "реферат", "презентация"]):
+        return "📚"
+
+    return "📝"
+
+
+def build_search_response(selected_rows):
+    response = f"🧠 Нашёл {len(selected_rows)} записи\n\n"
+
+    for index, (memory_id, text, created_at) in enumerate(selected_rows, start=1):
+        emoji = guess_memory_emoji(text)
+        preview = make_memory_preview(text)
+        date_text = format_moscow_datetime(created_at)
+
+        response += f"{index}. {emoji} Запись из памяти\n"
+        response += f"🕒 {date_text}\n\n"
+        response += f"{preview}\n\n"
+
+    return response.strip()
+
+
+def build_search_keyboard(selected_rows):
+    keyboard = []
+
+    for index, (memory_id, text, created_at) in enumerate(selected_rows, start=1):
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"📄 {index} полностью",
+                callback_data=f"full:{memory_id}"
+            ),
+            InlineKeyboardButton(
+                text=f"🗑 {index} удалить",
+                callback_data=f"delete:{memory_id}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def is_natural_search_query(text: str) -> bool:
     text_lower = text.lower().strip()
@@ -689,32 +753,42 @@ async def today_handler(message: Message):
     await message.answer(response)
 
 
-@dp.message(Command("search"))
-async def search_handler(message: Message):
-    query = message.text.replace("/search", "").strip()
-
-    if not query:
-        await message.answer(
-            "🔎 Напиши запрос после команды.\n\n"
-            "Пример:\n/search идея"
-        )
-        return
+@dp.message(lambda message: message.text and is_natural_search_query(message.text))
+async def natural_search_handler(message: Message):
+    query = clean_search_query(message.text)
 
     rows = get_last_memories_for_ai(message.from_user.id)
 
     if not rows:
-        await message.answer("🫥 Память пока пустая.")
+        await message.answer("😶 Память пока пустая.")
         return
 
     memories = "\n".join([
-    f"[{to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК] {text}"
-    for text, created_at in rows
-])
+        f"ID: {memory_id} | DATE: {to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК | TEXT: {text}"
+        for memory_id, text, created_at in rows
+    ])
 
+    selected_ids = ai_select_memory_ids(query, memories)
 
-    result = ai_search(query, memories)
+    row_map = {
+        memory_id: (memory_id, text, created_at)
+        for memory_id, text, created_at in rows
+    }
 
-    await message.answer(result)
+    selected_rows = [
+        row_map[memory_id]
+        for memory_id in selected_ids
+        if memory_id in row_map
+    ]
+
+    if not selected_rows:
+        await message.answer("Ничего релевантного не нашёл.")
+        return
+
+    await message.answer(
+        build_search_response(selected_rows),
+        reply_markup=build_search_keyboard(selected_rows)
+    )
 
 
 @dp.message(lambda message: message.voice)
@@ -805,6 +879,76 @@ async def natural_search_handler(message: Message):
     result = ai_search(query, memories)
 
     await message.answer(result)
+
+def get_memory_by_id(user_id: int, memory_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, text, created_at
+        FROM memories
+        WHERE user_id = %s AND id = %s
+    """, (user_id, memory_id))
+
+    row = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    return row
+
+
+def delete_memory_by_id(user_id: int, memory_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM memories
+        WHERE user_id = %s AND id = %s
+    """, (user_id, memory_id))
+
+    deleted_count = cursor.rowcount
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    return deleted_count > 0
+
+
+@dp.callback_query(lambda callback: callback.data.startswith("full:"))
+async def full_memory_callback(callback: CallbackQuery):
+    memory_id = int(callback.data.split(":")[1])
+
+    row = get_memory_by_id(callback.from_user.id, memory_id)
+
+    if not row:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+
+    memory_id, text, created_at = row
+
+    await callback.message.answer(
+        f"📄 Полная запись\n"
+        f"🕒 {format_moscow_datetime(created_at)}\n\n"
+        f"{text}"
+    )
+
+    await callback.answer()
+
+
+@dp.callback_query(lambda callback: callback.data.startswith("delete:"))
+async def delete_memory_callback(callback: CallbackQuery):
+    memory_id = int(callback.data.split(":")[1])
+
+    deleted = delete_memory_by_id(callback.from_user.id, memory_id)
+
+    if not deleted:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+
+    await callback.answer("Удалено.")
+    await callback.message.answer("🗑 Запись удалена из памяти.")
 
 @dp.message()
 async def save_text_handler(message: Message):
