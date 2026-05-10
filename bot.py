@@ -1349,7 +1349,10 @@ async def save_text_handler(message: Message):
         text=message.text
     )
 
-    await message.answer("✅ Сохранено.")
+   await message.answer(
+    "✅ Сохранено.\n\n"
+    f"{format_tags(metadata['tags'])}"
+)
 
 
 async def main():
