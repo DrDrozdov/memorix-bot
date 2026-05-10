@@ -794,7 +794,7 @@ async def natural_search_handler(message: Message):
     rows = get_last_memories_for_ai(message.from_user.id)
 
     if not rows:
-        await message.answer("🫥 Память пока пустая.")
+        await message.answer("😶 Память пока пустая.")
         return
 
     memories = "\n".join([
