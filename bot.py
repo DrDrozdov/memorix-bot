@@ -793,7 +793,7 @@ async def natural_search_handler(message: Message):
 
 @dp.message(lambda message: message.voice)
 async def voice_handler(message: Message):
-    status_message = await message.answer("🎙 Расшифровываю голосовое...")
+    status_message = await message.answer("🎙 Обрабатываю голосовое...")
 
     temp_path = None
 
@@ -821,6 +821,48 @@ async def voice_handler(message: Message):
             )
             return
 
+        if is_natural_search_query(text):
+            query = clean_search_query(text)
+
+            rows = get_last_memories_for_ai(message.from_user.id)
+
+            if not rows:
+                await status_message.edit_text("😶 Память пока пустая.")
+                return
+
+            memories = "\n".join([
+                f"ID: {memory_id} | DATE: {to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК | TEXT: {memory_text}"
+                for memory_id, memory_text, created_at in rows
+            ])
+
+            selected_ids = ai_select_memory_ids(query, memories)
+
+            row_map = {
+                memory_id: (memory_id, memory_text, created_at)
+                for memory_id, memory_text, created_at in rows
+            }
+
+            selected_rows = [
+                row_map[memory_id]
+                for memory_id in selected_ids
+                if memory_id in row_map
+            ]
+
+            if not selected_rows:
+                await status_message.edit_text("Ничего релевантного не нашёл.")
+                return
+
+            await status_message.edit_text(
+                f"🎙 Распознал запрос: «{text}»"
+            )
+
+            await message.answer(
+                build_search_response(selected_rows),
+                reply_markup=build_search_keyboard(selected_rows)
+            )
+
+            return
+
         save_memory(
             user_id=message.from_user.id,
             username=message.from_user.username,
@@ -832,9 +874,9 @@ async def voice_handler(message: Message):
         )
 
     except Exception as error:
-        print(f"Voice transcription error: {error}")
+        print(f"Voice processing error: {error}")
         await status_message.edit_text(
-            "Не получилось расшифровать голосовое. Попробуй ещё раз."
+            "Не получилось обработать голосовое. Попробуй ещё раз."
         )
 
     finally:
