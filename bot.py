@@ -6,7 +6,12 @@ from datetime import datetime, timedelta
 import psycopg2
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import (
+    Message,
+    BotCommand,
+    ReplyKeyboardMarkup,
+    KeyboardButton
+)
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -18,7 +23,19 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(text="🔍 Поиск"),
+            KeyboardButton(text="🧠 Память")
+        ],
+        [
+            KeyboardButton(text="📅 Сегодня"),
+            KeyboardButton(text="⚙️ Помощь")
+        ]
+    ],
+    resize_keyboard=True
+)
 client = OpenAI(
     api_key=OPENAI_API_KEY,
     base_url="https://api.aitunnel.ru/v1/"
@@ -193,7 +210,8 @@ async def start_handler(message: Message):
         "/memory — последние сохранения\n"
         "/search запрос — поиск по памяти\n"
         "/today — сохранения за сегодня\n"
-        "/help — помощь"
+        "/help — помощь",
+        reply_markup=main_keyboard
     )
 
 
@@ -341,7 +359,26 @@ async def voice_handler(message: Message):
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
+@dp.message(lambda message: message.text == "🧠 Память")
+async def memory_button_handler(message: Message):
+    await memory_handler(message)
 
+
+@dp.message(lambda message: message.text == "📅 Сегодня")
+async def today_button_handler(message: Message):
+    await today_handler(message)
+
+
+@dp.message(lambda message: message.text == "⚙️ Помощь")
+async def help_button_handler(message: Message):
+    await help_handler(message)
+
+
+@dp.message(lambda message: message.text == "🔍 Поиск")
+async def search_button_handler(message: Message):
+    await message.answer(
+        "Напиши:\n/search твой запрос"
+    )
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
@@ -361,6 +398,12 @@ async def save_text_handler(message: Message):
 
 async def main():
     init_db()
+    await bot.set_my_commands([
+    BotCommand(command="memory", description="Последние сохранения"),
+    BotCommand(command="search", description="AI-поиск по памяти"),
+    BotCommand(command="today", description="Сохранения за сегодня"),
+    BotCommand(command="help", description="Помощь")
+])
     print("Memorix started | VERSION: CLEAN_HELP_FIX_001")
     await dp.start_polling(bot)
 
