@@ -1555,11 +1555,11 @@ async def similar_memory_card_callback(callback: CallbackQuery):
         )
         return
 
-   memories = "\n".join([
+    memories = "\n".join([
         f"[{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
         for row in rows
         if row[1] != source_text
-    ])
+  ])
 
     if not memories.strip():
         await callback.answer(
