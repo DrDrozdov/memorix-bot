@@ -250,6 +250,28 @@ def format_tags(tags):
 
     return " ".join(f"#{tag}" for tag in limited_tags)
 
+def get_memory_card_keyboard(memory_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"delete_memory:{memory_id}"
+                ),
+                InlineKeyboardButton(
+                    text="🔎 Похожее",
+                    callback_data=f"similar_memory:{memory_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📌 Закрепить",
+                    callback_data=f"pin_memory:{memory_id}"
+                )
+            ]
+        ]
+    )
+
 def get_connection():
     return psycopg2.connect(DATABASE_URL)
 
@@ -295,6 +317,7 @@ def save_memory(user_id: int, username: str | None, text: str):
     cursor.execute("""
         INSERT INTO memories (user_id, username, text, created_at, category, content_type, tags)
         VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (
         user_id,
         username,
@@ -304,11 +327,12 @@ def save_memory(user_id: int, username: str | None, text: str):
         metadata["content_type"],
         json.dumps(metadata["tags"], ensure_ascii=False)
     ))
-
+    memory_id = cursor.fetchone()[0]
     conn.commit()
     cursor.close()
     conn.close()
 
+    metadata["memory_id"] = memory_id
     return metadata
 
 
@@ -1299,7 +1323,10 @@ async def voice_handler(message: Message):
             await status_message.edit_text(
                 "🎙 Голосовое сохранено\n\n"
                 f"📝 {voice_preview}\n"
-                f"🏷 {formatted_tags}"
+                f"🏷 {formatted_tags}",
+                reply_markup=get_memory_card_keyboard(
+                    metadata["memory_id"]
+                )
             )
         else:
             await status_message.edit_text(
@@ -1402,7 +1429,7 @@ async def full_memory_handler(callback: CallbackQuery):
 
 
 @dp.callback_query(lambda callback: callback.data.startswith("delete:"))
-async def delete_memory_callback(callback: CallbackQuery):
+async def delete_search_callback(callback: CallbackQuery):
     memory_id = int(callback.data.split(":")[1])
 
     deleted = delete_memory_by_id(callback.from_user.id, memory_id)
@@ -1413,6 +1440,31 @@ async def delete_memory_callback(callback: CallbackQuery):
 
     await callback.answer("Удалено.")
     await callback.message.answer("🗑 Запись удалена из памяти.")
+
+@dp.callback_query(lambda c: c.data.startswith("delete_memory:"))
+async def delete_memory_card_callback(callback: CallbackQuery):
+    memory_id = int(
+        callback.data.split(":")[1]
+    )
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM memories WHERE id = %s",
+        (memory_id,)
+    )
+
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+    await callback.message.edit_text(
+        "🗑 Запись удалена"
+    )
+
+    await callback.answer()
 
 @dp.message()
 async def save_text_handler(message: Message):
@@ -1446,12 +1498,18 @@ async def save_text_handler(message: Message):
         await message.answer(
             f"{save_title}\n\n"
             f"{preview_line}\n"
-            f"🏷 {formatted_tags}"
+            f"🏷 {formatted_tags}",
+            reply_markup=get_memory_card_keyboard(
+                metadata["memory_id"]
+            )   
         )
     else:
             await message.answer(
                 f"{save_title}\n\n"
-                f"{preview_line}"
+                f"{preview_line}",
+                reply_markup=get_memory_card_keyboard(
+                    metadata["memory_id"]
+                )
             )
 
 
