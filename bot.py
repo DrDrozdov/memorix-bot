@@ -384,7 +384,7 @@ def search_memories(user_id: int, query: str, limit: int = 10):
         FROM memories
         WHERE user_id = %s
         AND text ILIKE %s
-        ORDER BY id DESC
+        ORDER BY pinned DESC, id DESC
         LIMIT %s
     """, (
         user_id,
@@ -1153,6 +1153,43 @@ async def today_handler(message: Message):
 
     await message.answer(response)
 
+@dp.message(Command("pinned"))
+async def pinned_memories_handler(message: Message):
+    rows = get_pinned_memories(
+        message.from_user.id
+    )
+
+    if not rows:
+        await message.answer(
+            "📌 Закреплённых записей пока нет."
+        )
+        return
+
+    response = "📌 Закреплённые записи\n\n"
+
+    for row in rows:
+        memory_id = row[0]
+        text = row[1]
+        created_at = row[2]
+        category = row[3]
+        tags = row[5]
+
+        formatted_tags = format_tags(tags)
+        preview = make_preview(text)
+
+        response += (
+            f"📌 {category}\n"
+            f"🕒 {to_moscow_time(created_at).strftime('%d.%m %H:%M')} МСК\n"
+            f"📝 {preview}\n"
+        )
+
+        if formatted_tags:
+            response += f"🏷 {formatted_tags}\n"
+
+        response += "\n"
+
+    await message.answer(response)    
+
 @dp.message(Command("reset"))
 async def reset_handler(message: Message):
     keyboard = InlineKeyboardMarkup(
@@ -1468,6 +1505,25 @@ def toggle_pin_memory(user_id: int, memory_id: int):
         return result[0]
 
     return None    
+
+def get_pinned_memories(user_id: int, limit: int = 10):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, text, created_at, category, content_type, tags
+        FROM memories
+        WHERE user_id = %s AND pinned = TRUE
+        ORDER BY id DESC
+        LIMIT %s
+    """, (user_id, limit))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
 
 def get_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
