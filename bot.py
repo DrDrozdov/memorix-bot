@@ -1372,19 +1372,25 @@ async def save_text_handler(message: Message):
         )
         return
 
-        metadata = save_memory(
-            user_id=message.from_user.id,
-            username=message.from_user.username,
-            text=message.text
-        )
-        save_title = get_save_title(
-        metadata.get("content_type")
+    metadata = save_memory(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        text=message.text
     )
 
-    await message.answer(
-        f"{save_title}\n\n"
-        f"🏷 {format_tags(metadata['tags'])}"
-    )
+    content_type = metadata.get("content_type", "text")
+    tags = metadata.get("tags", [])
+
+    save_title = get_save_title(content_type)
+    formatted_tags = format_tags(tags)
+
+    if formatted_tags:
+        await message.answer(
+            f"{save_title}\n\n"
+            f"🏷 {formatted_tags}"
+        )
+    else:
+        await message.answer(save_title)
 
 
 
