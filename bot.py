@@ -1,7 +1,7 @@
 import asyncio
 import os
 import tempfile
-from urllib.parse import urlpase
+from urllib.parse import urlparse
 import json
 import re
 from datetime import datetime, timedelta
