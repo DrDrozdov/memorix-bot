@@ -261,11 +261,9 @@ def get_memory_card_keyboard(memory_id: int):
                 InlineKeyboardButton(
                     text="🔎 Похожее",
                     callback_data=f"similar_memory:{memory_id}"
-                )
-            ],
-            [
+                ),
                 InlineKeyboardButton(
-                    text="📌 Закрепить",
+                    text="📌",
                     callback_data=f"pin_memory:{memory_id}"
                 )
             ]
@@ -462,6 +460,50 @@ def ai_select_memory_ids(query: str, memories: str):
         ids = json.loads(match.group(0))
 
     return [int(item) for item in ids][:3]
+
+def ai_find_similar(source_text: str, memories: str):
+    prompt = f"""
+Ты ищешь похожие записи в личной памяти пользователя.
+
+Исходная запись:
+{source_text}
+
+Другие записи памяти:
+{memories}
+
+Задача:
+- найти записи, которые похожи по смыслу, теме или контексту;
+- не включать исходную запись;
+- не придумывать факты;
+- если похожих записей нет, так и скажи;
+- покажи максимум 3 записи.
+
+Формат ответа:
+🔎 Похожие записи
+
+1. Короткий заголовок
+🕒 дата и время
+Краткое описание в 1 предложении.
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты точный AI-поисковик по личной памяти. "
+                    "Ты ищешь только по предоставленным записям и ничего не придумываешь."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+    )
+
+    return response.choices[0].message.content
 
 def format_moscow_datetime(created_at):
     months = [
@@ -1400,6 +1442,22 @@ def delete_memory_by_id(user_id: int, memory_id: int):
 
     return deleted_count > 0
 
+def get_memory_by_id(user_id: int, memory_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT text, created_at
+        FROM memories
+        WHERE user_id = %s AND id = %s
+    """, (user_id, memory_id))
+
+    row = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    return row
 
 @dp.callback_query(lambda callback: callback.data.startswith("full:"))
 async def full_memory_handler(callback: CallbackQuery):
@@ -1465,6 +1523,66 @@ async def delete_memory_card_callback(callback: CallbackQuery):
     )
 
     await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("similar_memory:"))
+async def similar_memory_card_callback(callback: CallbackQuery):
+    memory_id = int(
+        callback.data.split(":")[1]
+    )
+
+    source = get_memory_by_id(
+        callback.from_user.id,
+        memory_id
+    )
+
+    if not source:
+        await callback.answer(
+            "Запись не найдена.",
+            show_alert=True
+        )
+        return
+
+    source_text, _ = source
+
+    rows = get_last_memories_for_ai(
+        callback.from_user.id
+    )
+
+    if not rows:
+        await callback.answer(
+            "Похожих записей пока нет.",
+            show_alert=True
+        )
+        return
+
+    memories = "\n".join([
+        f"[{to_moscow_time(created_at).strftime('%Y-%m-%d %H:%M:%S')} МСК] {text}"
+        for text, created_at in rows
+        if text != source_text
+    ])
+
+    if not memories.strip():
+        await callback.answer(
+            "Похожих записей пока нет.",
+            show_alert=True
+        )
+        return
+
+    result = ai_find_similar(
+        source_text,
+        memories
+    )
+
+    await callback.message.answer(result)
+
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("pin_memory:"))
+async def pin_memory_card_callback(callback: CallbackQuery):
+    await callback.answer(
+        "Закрепление скоро добавим.",
+        show_alert=True
+    )
 
 @dp.message()
 async def save_text_handler(message: Message):
