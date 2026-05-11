@@ -301,6 +301,11 @@ def init_db():
         ALTER TABLE memories
         ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT '[]'
     """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE
+    """)
     conn.commit()
     cursor.close()
     conn.close()
