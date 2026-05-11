@@ -1448,7 +1448,7 @@ async def save_text_handler(message: Message):
             f"{preview_line}\n"
             f"🏷 {formatted_tags}"
         )
-        else:
+    else:
             await message.answer(
                 f"{save_title}\n\n"
                 f"{preview_line}"
