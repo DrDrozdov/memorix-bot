@@ -167,6 +167,18 @@ def generate_memory_metadata(text: str):
             "tags": ["разное"]
         }
 
+def get_save_title(content_type):
+    mapping = {
+        "text": "✅ Добавлено в память",
+        "voice": "🎙 Голосовое сохранено",
+        "link": "🔗 Ссылка сохранена",
+        "idea": "💡 Идея сохранена"
+    }
+
+    return mapping.get(
+        content_type,
+        "✅ Сохранено"
+    )
 
 def format_tags(tags):
     if not tags:
