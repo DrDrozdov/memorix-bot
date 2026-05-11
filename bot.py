@@ -168,16 +168,31 @@ def generate_memory_metadata(text: str):
         }
 
 def get_save_title(content_type):
+    content_type = str(content_type).lower().strip()
+
     mapping = {
         "text": "✅ Добавлено в память",
-        "voice": "🎙 Голосовое сохранено",
+        "текст": "✅ Добавлено в память",
+        "📝 текст": "✅ Добавлено в память",
+
         "link": "🔗 Ссылка сохранена",
-        "idea": "💡 Идея сохранена"
+        "url": "🔗 Ссылка сохранена",
+        "ссылка": "🔗 Ссылка сохранена",
+        "🔗 ссылка": "🔗 Ссылка сохранена",
+
+        "voice": "🎙 Голосовое сохранено",
+        "audio": "🎙 Голосовое сохранено",
+        "голосовое": "🎙 Голосовое сохранено",
+        "🎙 голосовое": "🎙 Голосовое сохранено",
+
+        "idea": "💡 Идея сохранена",
+        "идея": "💡 Идея сохранена",
+        "💡 идея": "💡 Идея сохранена"
     }
 
     return mapping.get(
         content_type,
-        "✅ Сохранено"
+        "✅ Добавлено в память"
     )
 
 def format_tags(tags):
@@ -1248,14 +1263,19 @@ async def voice_handler(message: Message):
             username=message.from_user.username,
             text=text
         )
-
-        await status_message.edit_text(
-            f"✅ Голосовое сохранено.\n\n"
-            f"{metadata['category']}\n"
-            f"{metadata['content_type']}\n"
-            f"🏷 {format_tags(metadata['tags'])}\n\n"
-            f"{text}"
+        formatted_tags = format_tags(
+            metadata.get("tags", [])
         )
+
+        if formatted_tags:
+            await status_message.edit_text(
+                "🎙 Голосовое сохранено\n\n"
+                f"🏷 {formatted_tags}"
+            )
+        else:
+            await status_message.edit_text(
+                "🎙 Голосовое сохранено"
+            )
 
     except Exception as error:
         print(f"Voice processing error: {error}")
