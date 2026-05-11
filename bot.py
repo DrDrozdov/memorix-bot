@@ -1,6 +1,7 @@
 import asyncio
 import os
 import tempfile
+from urllib.parse import urlpase
 import json
 import re
 from datetime import datetime, timedelta
@@ -194,6 +195,31 @@ def get_save_title(content_type):
         content_type,
         "✅ Добавлено в память"
     )
+
+def make_preview(text: str, limit: int = 120):
+    if not text:
+        return ""
+
+    clean_text = " ".join(text.split())
+
+    if len(clean_text) > limit:
+        clean_text = clean_text[:limit].rstrip() + "..."
+
+    return clean_text
+
+
+def extract_domain(text: str):
+    if not text:
+        return ""
+
+    words = text.split()
+
+    for word in words:
+        if word.startswith("http://") or word.startswith("https://"):
+            parsed = urlparse(word)
+            return parsed.netloc.replace("www.", "")
+
+    return ""
 
 def format_tags(tags):
     if not tags:
@@ -1267,14 +1293,18 @@ async def voice_handler(message: Message):
             metadata.get("tags", [])
         )
 
+        voice_preview = make_preview(text)
+
         if formatted_tags:
             await status_message.edit_text(
                 "🎙 Голосовое сохранено\n\n"
+                f"📝 {voice_preview}\n"
                 f"🏷 {formatted_tags}"
             )
         else:
             await status_message.edit_text(
-                "🎙 Голосовое сохранено"
+                "🎙 Голосовое сохранено\n\n"
+                f"📝 {voice_preview}"
             )
 
     except Exception as error:
@@ -1404,13 +1434,25 @@ async def save_text_handler(message: Message):
     save_title = get_save_title(content_type)
     formatted_tags = format_tags(tags)
 
+    preview = make_preview(message.text)
+    domain = extract_domain(message.text)
+
+    if domain:
+        preview_line = f"🌐 {domain}"
+    else:
+        preview_line = f"📝 {preview}"
+
     if formatted_tags:
         await message.answer(
             f"{save_title}\n\n"
+            f"{preview_line}\n"
             f"🏷 {formatted_tags}"
         )
-    else:
-        await message.answer(save_title)
+        else:
+            await message.answer(
+                f"{save_title}\n\n"
+                f"{preview_line}"
+            )
 
 
 
