@@ -944,16 +944,13 @@ def format_memory_list(memories, title: str):
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     await message.answer(
-        "👋 Привет! Я Memorix.\n\n"
-        "Сохраняй мысли, идеи, ссылки, заметки и голосовые сообщения в одном месте — "
-        "и находи их за секунды.\n\n"
-        "Команды:\n"
-        "/memory — последние сохранения\n"
-        "/search запрос — поиск по памяти\n"
-        "/today — сохранения за сегодня\n"
-        "/help — помощь",
-        reply_markup=main_keyboard
-    )
+    "👋 Привет. Это Memorix.\n\n"
+    "Твоя личная AI-память.\n\n"
+    "Сохраняй мысли, идеи, голосовые сообщения, ссылки и важные детали.\n"
+    "Memorix запомнит их и поможет найти в нужный момент.\n\n"
+    "Просто отправь сообщение 👇",
+    reply_markup=main_keyboard
+)
 
 
 @dp.message(Command("help"))
