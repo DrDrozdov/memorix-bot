@@ -1447,6 +1447,28 @@ def delete_memory_by_id(user_id: int, memory_id: int):
 
     return deleted_count > 0
 
+def toggle_pin_memory(user_id: int, memory_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE memories
+        SET pinned = NOT pinned
+        WHERE user_id = %s AND id = %s
+        RETURNING pinned
+    """, (user_id, memory_id))
+
+    result = cursor.fetchone()
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    if result:
+        return result[0]
+
+    return None    
+
 def get_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
     cursor = conn.cursor()
@@ -1582,12 +1604,29 @@ async def similar_memory_card_callback(callback: CallbackQuery):
 
     await callback.answer()
 
+
 @dp.callback_query(lambda c: c.data.startswith("pin_memory:"))
-async def pin_memory_card_callback(callback: CallbackQuery):
-    await callback.answer(
-        "Закрепление скоро добавим.",
-        show_alert=True
+async def pin_memory_callback(callback: CallbackQuery):
+    memory_id = int(callback.data.split(":")[1])
+
+    pinned = toggle_pin_memory(
+        callback.from_user.id,
+        memory_id
     )
+
+    if pinned is None:
+        await callback.answer(
+            "Запись не найдена.",
+            show_alert=True
+        )
+        return
+
+    if pinned:
+        text = "📌 Запись закреплена"
+    else:
+        text = "📍 Запись откреплена"
+
+    await callback.answer(text)    
 
 @dp.message()
 async def save_text_handler(message: Message):
