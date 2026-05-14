@@ -432,6 +432,7 @@ def ai_select_memory_ids(query: str, memories: str):
 
 Правила:
 - выбери только реально релевантные записи;
+- ID записи указан после "ID:"; возвращай именно эти ID;
 - не придумывай новые факты;
 - верни максимум 3 записи;
 - ответь ТОЛЬКО JSON-массивом ID.
@@ -1257,7 +1258,7 @@ async def search_handler(message: Message):
         return
 
     memories = "\n".join([
-        f"{'📌 ' if row[6] else ''}[{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
+        f"{'📌 ' if row[6] else ''}ID:{row[0]} [{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
         for row in rows
     ])
 
@@ -1294,8 +1295,8 @@ async def natural_search_handler(message: Message):
         return
 
     memories = "\n".join([
-        f"{'📌 ' if row[6] else ''}[{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
-       for row in rows
+        f"{'📌 ' if row[6] else ''}ID:{row[0]} [{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
+        for row in rows
     ])
 
     selected_ids = ai_select_memory_ids(query, memories)
