@@ -405,10 +405,10 @@ def get_last_memories_for_ai(user_id: int, limit: int = 30):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, text, created_at, category, content_type, tags
+        SELECT id, text, created_at, category, content_type, tags, pinned
         FROM memories
         WHERE user_id = %s
-        ORDER BY id DESC
+        ORDER BY pinned DESC, id DESC
         LIMIT %s
     """, (user_id, limit))
 
@@ -1101,6 +1101,7 @@ async def help_handler(message: Message):
         "📦 Разное — всё, что не подошло выше\n\n"
         "Команды:\n"
         "/memory — последние записи\n"
+        "/pinned — закреплённые записи\n"
         "/today — сохранения за сегодня\n"
         "/search запрос — AI-поиск\n"
         "/reset — удалить всю память\n"
@@ -1256,7 +1257,7 @@ async def search_handler(message: Message):
         return
 
     memories = "\n".join([
-        f"ID: {row[0]} | DATE: {to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК | CATEGORY: {row[3]} | TYPE: {row[4]} | TAGS: {format_tags(row[5])} | TEXT: {row[1]}"
+        f"{'📌 ' if row[6] else ''}[{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
         for row in rows
     ])
 
@@ -1293,8 +1294,8 @@ async def natural_search_handler(message: Message):
         return
 
     memories = "\n".join([
-        f"ID: {row[0]} | DATE: {to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК | CATEGORY: {row[3]} | TYPE: {row[4]} | TAGS: {format_tags(row[5])} | TEXT: {row[1]}"
-        for row in rows
+        f"{'📌 ' if row[6] else ''}[{to_moscow_time(row[2]).strftime('%Y-%m-%d %H:%M:%S')} МСК] {row[1]}"
+       for row in rows
     ])
 
     selected_ids = ai_select_memory_ids(query, memories)
@@ -1739,7 +1740,8 @@ async def main():
     BotCommand(command="search", description="AI-поиск по памяти"),
     BotCommand(command="today", description="Сохранения за сегодня"),
     BotCommand(command="reset", description="Сбросить память"),
-    BotCommand(command="help", description="Помощь")
+    BotCommand(command="help", description="Помощь"), 
+    BotCommand(command="pinned", description="Закреплённые записи"),
 ])
     print("Memorix started | VERSION: SEARCH_UI_FIX_002")
     await dp.start_polling(bot)
