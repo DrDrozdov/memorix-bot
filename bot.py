@@ -1886,7 +1886,7 @@ async def save_text_handler(message: Message):
             await message.answer(
                 f"{save_title}\n\n"
                 f"{source_line}"
-                f"{preview_line}\n"
+                f"{preview_line}\n",
                 reply_markup=get_memory_card_keyboard(
                     metadata["memory_id"],
                     False
