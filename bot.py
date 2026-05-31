@@ -51,6 +51,9 @@ main_keyboard = ReplyKeyboardMarkup(
         [
             KeyboardButton(text="📂 Категории")
         ]
+        [
+            KeyboardButton(text="🧩 Типы контента")
+        ]
     ],
     resize_keyboard=True
 )
@@ -654,6 +657,30 @@ def search_memories_by_category(user_id: int, category: str, limit: int = 10):
 
     return rows
 
+def search_memories_by_content_type(user_id: int, content_type: str, limit: int = 10):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, text, created_at, category, content_type, tags, pinned
+        FROM memories
+        WHERE user_id = %s
+        AND content_type = %s
+        ORDER BY pinned DESC, id DESC
+        LIMIT %s
+    """, (
+        user_id,
+        content_type,
+        limit
+    ))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
+
 def get_last_memories_for_ai(user_id: int, limit: int = 30):
     conn = get_connection()
     cursor = conn.cursor()
@@ -872,6 +899,24 @@ def build_search_keyboard(selected_rows):
         ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def build_content_types_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📝 Текст", callback_data="type:📝 текст"),
+                InlineKeyboardButton(text="🔗 Ссылки", callback_data="type:🔗 ссылка")
+            ],
+            [
+                InlineKeyboardButton(text="🖼 Фото", callback_data="type:🖼 фото"),
+                InlineKeyboardButton(text="🎬 Видео", callback_data="type:🎬 видео")
+            ],
+            [
+                InlineKeyboardButton(text="🎙 Голосовые", callback_data="type:🎙 голосовое"),
+                InlineKeyboardButton(text="⭕ Кружки", callback_data="type:⭕ кружок")
+            ]
+        ]
+    )
 
 def build_categories_keyboard(categories):
     keyboard = []
@@ -1736,6 +1781,13 @@ async def search_button_handler(message: Message):
         "Напиши:\n/search твой запрос"
     )
 
+@dp.message(lambda message: message.text == "🧩 Типы контента")
+async def content_types_button_handler(message: Message):
+    await message.answer(
+        "🧩 Выбери тип записей:",
+        reply_markup=build_content_types_keyboard()
+    )
+
 @dp.message(lambda message: message.text == "🏷 Теги")
 async def tags_button_handler(message: Message):
     tags = get_all_user_tags(message.from_user.id)
@@ -2001,6 +2053,28 @@ async def full_memory_handler(callback: CallbackQuery):
 
     await callback.answer()
 
+@dp.callback_query(lambda callback: callback.data.startswith("type:"))
+async def content_type_callback(callback: CallbackQuery):
+    content_type = callback.data.replace("type:", "", 1)
+
+    rows = search_memories_by_content_type(
+        callback.from_user.id,
+        content_type
+    )
+
+    if not rows:
+        await callback.answer(
+            "Записей этого типа пока нет.",
+            show_alert=True
+        )
+        return
+
+    await callback.message.answer(
+        build_search_response(rows),
+        reply_markup=build_search_keyboard(rows)
+    )
+
+    await callback.answer()
 
 @dp.callback_query(lambda callback: callback.data.startswith("delete:"))
 async def delete_search_callback(callback: CallbackQuery):
@@ -2129,9 +2203,18 @@ async def edit_memory_callback(
     callback: CallbackQuery,
     state: FSMContext
 ):
-    memory_id = int(
-        callback.data.split(":")[1]
+    memory_id = int(callback.data.split(":")[1])
+
+    row = get_memory_by_id(
+        callback.from_user.id,
+        memory_id
     )
+
+    if not row:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+
+    current_text = row[1]
 
     await state.update_data(
         memory_id=memory_id
@@ -2142,7 +2225,10 @@ async def edit_memory_callback(
     )
 
     await callback.message.answer(
-        "✏️ Отправь новый текст записи"
+        "✏️ Текущий текст / подпись:\n\n"
+        f"{current_text}\n\n"
+        "Отправь новый текст.\n"
+        "Он заменит текст записи или станет подписью к медиа."
     )
 
     await callback.answer()
