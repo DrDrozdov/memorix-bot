@@ -1545,22 +1545,6 @@ def get_pinned_memories(user_id: int, limit: int = 10):
 
     return rows
 
-def get_memory_by_id(user_id: int, memory_id: int):
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT text, created_at
-        FROM memories
-        WHERE user_id = %s AND id = %s
-    """, (user_id, memory_id))
-
-    row = cursor.fetchone()
-
-    cursor.close()
-    conn.close()
-
-    return row
 
 @dp.callback_query(lambda callback: callback.data.startswith("full:"))
 async def full_memory_handler(callback: CallbackQuery):
