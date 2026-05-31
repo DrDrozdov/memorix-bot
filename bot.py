@@ -191,7 +191,15 @@ def get_save_title(content_type):
 
         "idea": "💡 Идея сохранена",
         "идея": "💡 Идея сохранена",
-        "💡 идея": "💡 Идея сохранена"
+        "💡 идея": "💡 Идея сохранена",
+
+        "photo": "🖼 Фото сохранено",
+        "фото": "🖼 Фото сохранено",
+        "🖼 фото": "🖼 Фото сохранено",
+
+        "video": "🎬 Видео сохранено",
+        "видео": "🎬 Видео сохранено",
+        "🎬 видео": "🎬 Видео сохранено",
     }
 
     return mapping.get(
@@ -210,6 +218,38 @@ def make_preview(text: str, limit: int = 120):
 
     return clean_text
 
+def extract_forward_source(message: Message):
+    source_title = None
+    source_username = None
+    source_chat_id = None
+    source_link = None
+
+    origin = getattr(message, "forward_origin", None)
+
+    if origin:
+        chat = getattr(origin, "chat", None)
+
+        if chat:
+            source_title = getattr(chat, "title", None)
+            source_username = getattr(chat, "username", None)
+            source_chat_id = getattr(chat, "id", None)
+
+    old_chat = getattr(message, "forward_from_chat", None)
+
+    if old_chat:
+        source_title = getattr(old_chat, "title", source_title)
+        source_username = getattr(old_chat, "username", source_username)
+        source_chat_id = getattr(old_chat, "id", source_chat_id)
+
+    if source_username:
+        source_link = f"https://t.me/{source_username}"
+
+    return {
+        "source_title": source_title,
+        "source_username": source_username,
+        "source_chat_id": source_chat_id,
+        "source_link": source_link
+    }
 
 def extract_domain(text: str):
     if not text:
@@ -311,20 +351,69 @@ def init_db():
         ALTER TABLE memories
         ADD COLUMN IF NOT EXISTS pinned BOOLEAN DEFAULT FALSE
     """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS source_title TEXT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS source_username TEXT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS source_chat_id BIGINT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS source_link TEXT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS media_type TEXT
+    """)
+
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS media_file_id TEXT
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
 
 
-def save_memory(user_id: int, username: str | None, text: str):
+def save_memory(
+    user_id: int,
+    username: str | None,
+    text: str,
+    content_type_override: str | None = None,
+    source_title: str | None = None,
+    source_username: str | None = None,
+    source_chat_id: int | None = None,
+    source_link: str | None = None,
+    media_type: str | None = None,
+    media_file_id: str | None = None
+):
     metadata = generate_memory_metadata(text)
+
+    if content_type_override:
+        metadata["content_type"] = content_type_override
 
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO memories (user_id, username, text, created_at, category, content_type, tags)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO memories (
+            user_id, username, text, created_at, category, content_type, tags,
+            source_title, source_username, source_chat_id, source_link,
+            media_type, media_file_id
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         user_id,
@@ -333,9 +422,17 @@ def save_memory(user_id: int, username: str | None, text: str):
         datetime.now(),
         metadata["category"],
         metadata["content_type"],
-        json.dumps(metadata["tags"], ensure_ascii=False)
+        json.dumps(metadata["tags"], ensure_ascii=False),
+        source_title,
+        source_username,
+        source_chat_id,
+        source_link,
+        media_type,
+        media_file_id
     ))
+
     memory_id = cursor.fetchone()[0]
+
     conn.commit()
     cursor.close()
     conn.close()
@@ -1681,6 +1778,60 @@ async def pin_memory_callback(callback: CallbackQuery):
 
     await callback.answer(text)   
 
+@dp.message(lambda message: message.photo or message.video)
+async def media_handler(message: Message):
+    source = extract_forward_source(message)
+
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id
+        content_type = "🖼 фото"
+        title = "🖼 Фото сохранено"
+        fallback_text = "Фото без подписи"
+    else:
+        media_type = "video"
+        media_file_id = message.video.file_id
+        content_type = "🎬 видео"
+        title = "🎬 Видео сохранено"
+        fallback_text = "Видео без подписи"
+
+    text = message.caption or fallback_text
+
+    metadata = save_memory(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        text=text,
+        content_type_override=content_type,
+        source_title=source["source_title"],
+        source_username=source["source_username"],
+        source_chat_id=source["source_chat_id"],
+        source_link=source["source_link"],
+        media_type=media_type,
+        media_file_id=media_file_id
+    )
+
+    formatted_tags = format_tags(
+        metadata.get("tags", [])
+    )
+
+    preview = make_preview(text)
+
+    source_line = ""
+
+    if source["source_title"]:
+        source_line = f"📣 {source['source_title']}\n"
+
+    await message.answer(
+        f"{title}\n\n"
+        f"{source_line}"
+        f"📝 {preview}\n"
+        f"🏷 {formatted_tags}",
+        reply_markup=get_memory_card_keyboard(
+            metadata["memory_id"],
+            False
+        )
+    )
+
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
@@ -1689,10 +1840,16 @@ async def save_text_handler(message: Message):
         )
         return
 
+    source = extract_forward_source(message)
+
     metadata = save_memory(
         user_id=message.from_user.id,
         username=message.from_user.username,
-        text=message.text
+        text=message.text,
+        source_title=source["source_title"],
+        source_username=source["source_username"],
+        source_chat_id=source["source_chat_id"],
+        source_link=source["source_link"]
     )
 
     content_type = metadata.get("content_type", "text")
@@ -1709,9 +1866,15 @@ async def save_text_handler(message: Message):
     else:
         preview_line = f"📝 {preview}"
 
+    source_line = ""
+
+    if source["source_title"]:
+        source_line = f"📣 {source['source_title']}\n"
+
     if formatted_tags:
         await message.answer(
             f"{save_title}\n\n"
+            f"{source_line}"
             f"{preview_line}\n"
             f"🏷 {formatted_tags}",
             reply_markup=get_memory_card_keyboard(
@@ -1722,7 +1885,8 @@ async def save_text_handler(message: Message):
     else:
             await message.answer(
                 f"{save_title}\n\n"
-                f"{preview_line}",
+                f"{source_line}"
+                f"{preview_line}\n"
                 reply_markup=get_memory_card_keyboard(
                     metadata["memory_id"],
                     False
