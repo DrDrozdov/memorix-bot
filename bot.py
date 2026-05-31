@@ -50,7 +50,7 @@ main_keyboard = ReplyKeyboardMarkup(
         ],
         [
             KeyboardButton(text="📂 Категории")
-        ]
+        ],
         [
             KeyboardButton(text="🧩 Типы контента")
         ]
