@@ -581,6 +581,9 @@ def build_search_keyboard(selected_rows):
 
     for index, row in enumerate(selected_rows, start=1):
         memory_id = row[0]
+        pinned = row[6]
+
+        pin_text = f"📍 {index} открепить" if pinned else f"📌 {index} закрепить"
 
         keyboard.append([
             InlineKeyboardButton(
@@ -590,6 +593,10 @@ def build_search_keyboard(selected_rows):
             InlineKeyboardButton(
                 text=f"🗑 {index} удалить",
                 callback_data=f"delete:{memory_id}"
+            ),
+            InlineKeyboardButton(
+                text=pin_text,
+                callback_data=f"pin_memory:{memory_id}"
             )
         ])
 
@@ -1283,10 +1290,16 @@ async def search_handler(message: Message):
         await message.answer("Ничего релевантного не нашёл.")
         return
 
-    await message.answer(
-        build_search_response(selected_rows),
-        reply_markup=build_search_keyboard(selected_rows)
-    )
+    await message.answer(build_search_response(selected_rows))
+
+    for row in selected_rows:
+        await message.answer(
+            f"Действия для записи {row[0]}",
+            reply_markup=get_memory_card_keyboard(
+                row[0],
+                row[6]  # pinned
+            )
+        )
 
 @dp.message(lambda message: message.text and is_natural_search_query(message.text))
 async def natural_search_handler(message: Message):
