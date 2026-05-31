@@ -45,7 +45,8 @@ main_keyboard = ReplyKeyboardMarkup(
             KeyboardButton(text="⚙️ Помощь")
         ],
         [
-            KeyboardButton(text="📌 Закреплённые")
+            KeyboardButton(text="📌 Закреплённые"),
+            KeyboardButton(text="🏷 Теги")
         ]
     ],
     resize_keyboard=True
@@ -505,6 +506,48 @@ def delete_all_memories(user_id: int):
 
     return deleted_count
 
+def get_all_user_tags(user_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT tags
+        FROM memories
+        WHERE user_id = %s
+    """, (user_id,))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    tag_counter = {}
+
+    for row in rows:
+        tags = row[0]
+
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except Exception:
+                tags = []
+
+        if not isinstance(tags, list):
+            continue
+
+        for tag in tags:
+            clean_tag = str(tag).lower().strip().replace("#", "")
+            if not clean_tag:
+                continue
+
+            tag_counter[clean_tag] = tag_counter.get(clean_tag, 0) + 1
+
+    return sorted(
+        tag_counter.items(),
+        key=lambda item: item[1],
+        reverse=True
+    )
+
 def search_memories(user_id: int, query: str, limit: int = 10):
     conn = get_connection()
     cursor = conn.cursor()
@@ -529,6 +572,37 @@ def search_memories(user_id: int, query: str, limit: int = 10):
 
     return rows
 
+def search_memories_by_tag(user_id: int, tag: str, limit: int = 10):
+    clean_tag = (
+        tag.lower()
+        .replace("#", "")
+        .replace(" ", "")
+        .replace("-", "")
+        .strip()
+    )
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, text, created_at, category, content_type, tags, pinned
+        FROM memories
+        WHERE user_id = %s
+        AND tags ILIKE %s
+        ORDER BY pinned DESC, id DESC
+        LIMIT %s
+    """, (
+        user_id,
+        f"%{clean_tag}%",
+        limit
+    ))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
 
 def get_last_memories_for_ai(user_id: int, limit: int = 30):
     conn = get_connection()
@@ -703,6 +777,25 @@ def build_search_response(selected_rows):
 
     return response.strip()
 
+def build_single_memory_response(row):
+    memory_id, text, created_at, category, content_type, tags = row
+
+    preview = make_memory_preview(text)
+    tag_text = format_tags(tags)
+
+    response = (
+        f"✅ Запись обновлена\n\n"
+        f"{category} Запись из памяти\n"
+        f"🕒 {format_moscow_datetime(created_at)}\n"
+        f"{content_type}\n"
+    )
+
+    if tag_text:
+        response += f"{tag_text}\n"
+
+    response += f"\n{preview}"
+
+    return response
 
 def build_search_keyboard(selected_rows):
     keyboard = []
@@ -1580,6 +1673,24 @@ async def search_button_handler(message: Message):
         "Напиши:\n/search твой запрос"
     )
 
+@dp.message(lambda message: message.text == "🏷 Теги")
+async def tags_button_handler(message: Message):
+    tags = get_all_user_tags(message.from_user.id)
+
+    if not tags:
+        await message.answer(
+            "🏷 Тегов пока нет."
+        )
+        return
+
+    response = "🏷 Все теги\n\n"
+
+    for tag, count in tags[:30]:
+        response += f"#{tag} — {count}\n"
+
+    response += "\nНажми на тег или отправь его сообщением, например: #работа"
+
+    await message.answer(response)
 
 def get_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
@@ -1597,6 +1708,37 @@ def get_memory_by_id(user_id: int, memory_id: int):
     conn.close()
 
     return row
+
+def get_memory_tags_by_id(user_id: int, memory_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT tags
+        FROM memories
+        WHERE user_id = %s AND id = %s
+    """, (user_id, memory_id))
+
+    row = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    if not row:
+        return []
+
+    tags = row[0]
+
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except Exception:
+            tags = []
+
+    if not isinstance(tags, list):
+        tags = []
+
+    return tags
 
 def delete_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
@@ -1881,14 +2023,27 @@ async def edit_tags_callback(
 ):
     memory_id = int(callback.data.split(":")[1])
 
+    current_tags = get_memory_tags_by_id(
+        callback.from_user.id,
+        memory_id
+    )
+
+    current_tags_text = format_tags(current_tags)
+
+    if not current_tags_text:
+        current_tags_text = "тегов пока нет"
+
     await state.update_data(memory_id=memory_id)
 
     await state.set_state(EditTagsState.waiting_for_tags)
 
     await callback.message.answer(
-        "🏷 Отправь новые теги через пробел.\n\n"
+        "🏷 Текущие теги:\n\n"
+        f"{current_tags_text}\n\n"
+        "Отправь новые теги через пробел.\n\n"
         "Например:\n"
-        "авто audi ремонт"
+        "работа обучение идеи\n\n"
+        "Старые теги будут заменены."
     )
 
     await callback.answer()
@@ -1933,9 +2088,18 @@ async def process_edit_tags(
 
     await state.clear()
 
+    row = get_memory_by_id(
+        message.from_user.id,
+        memory_id
+    )
+
     await message.answer(
         "✅ Теги обновлены\n\n"
-        f"{format_tags(tags)}"
+        + build_single_memory_response(row).replace("✅ Запись обновлена\n\n", ""),
+        reply_markup=get_memory_card_keyboard(
+            memory_id,
+            False
+        )
     )
 
 @dp.message(EditMemoryState.waiting_for_text)
@@ -1955,8 +2119,17 @@ async def process_edit_memory(
 
     await state.clear()
 
+    row = get_memory_by_id(
+        message.from_user.id,
+        memory_id
+    )
+
     await message.answer(
-        "✅ Запись обновлена"
+        build_single_memory_response(row),
+        reply_markup=get_memory_card_keyboard(
+            memory_id,
+            False
+        )
     )
 
 async def save_media_group_later(group_id: str):
@@ -2095,6 +2268,26 @@ async def media_handler(message: Message):
             metadata["memory_id"],
             False
         )
+    )
+
+@dp.message(lambda message: message.text and message.text.strip().startswith("#"))
+async def tag_search_handler(message: Message):
+    tag = message.text.strip().split()[0]
+
+    rows = search_memories_by_tag(
+        message.from_user.id,
+        tag
+    )
+
+    if not rows:
+        await message.answer(
+            f"По тегу {tag} ничего не найдено."
+        )
+        return
+
+    await message.answer(
+        build_search_response(rows),
+        reply_markup=build_search_keyboard(rows)
     )
 
 @dp.message()
