@@ -319,16 +319,18 @@ def get_memory_card_keyboard(memory_id: int, pinned: bool = False):
                     callback_data=f"similar_memory:{memory_id}"
                 ),
                 InlineKeyboardButton(
+                    text=pin_text,
+                    callback_data=f"pin_memory:{memory_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="✏️ Изменить",
                     callback_data=f"edit_memory:{memory_id}"
                 ),
                 InlineKeyboardButton(
                     text="🏷 Теги",
                     callback_data=f"edit_tags:{memory_id}"
-                ),
-                InlineKeyboardButton(
-                    text=pin_text,
-                    callback_data=f"pin_memory:{memory_id}"
                 )
             ]
         ]
