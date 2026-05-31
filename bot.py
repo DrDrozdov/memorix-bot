@@ -250,7 +250,9 @@ def format_tags(tags):
 
     return " ".join(f"#{tag}" for tag in limited_tags)
 
-def get_memory_card_keyboard(memory_id: int):
+def get_memory_card_keyboard(memory_id: int, pinned: bool = False):
+    pin_text = "📍 Открепить" if pinned else "📌 Закрепить"
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -263,7 +265,7 @@ def get_memory_card_keyboard(memory_id: int):
                     callback_data=f"similar_memory:{memory_id}"
                 ),
                 InlineKeyboardButton(
-                    text="📌",
+                    text=pin_text,
                     callback_data=f"pin_memory:{memory_id}"
                 )
             ]
@@ -1413,8 +1415,9 @@ async def voice_handler(message: Message):
                 f"📝 {voice_preview}\n"
                 f"🏷 {formatted_tags}",
                 reply_markup=get_memory_card_keyboard(
-                    metadata["memory_id"]
-                )
+                                metadata["memory_id"],
+                                False
+                            )
             )
         else:
             await status_message.edit_text(
@@ -1686,7 +1689,14 @@ async def pin_memory_callback(callback: CallbackQuery):
     else:
         text = "📍 Запись откреплена"
 
-    await callback.answer(text)    
+    await callback.message.edit_reply_markup(
+        reply_markup=get_memory_card_keyboard(
+            memory_id,
+            pinned
+        )
+    )
+
+    await callback.answer(text)   
 
 @dp.message()
 async def save_text_handler(message: Message):
@@ -1722,7 +1732,8 @@ async def save_text_handler(message: Message):
             f"{preview_line}\n"
             f"🏷 {formatted_tags}",
             reply_markup=get_memory_card_keyboard(
-                metadata["memory_id"]
+                metadata["memory_id"],
+                False 
             )   
         )
     else:
@@ -1730,7 +1741,8 @@ async def save_text_handler(message: Message):
                 f"{save_title}\n\n"
                 f"{preview_line}",
                 reply_markup=get_memory_card_keyboard(
-                    metadata["memory_id"]
+                    metadata["memory_id"],
+                    False
                 )
             )
 
