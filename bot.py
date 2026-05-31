@@ -29,6 +29,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+media_group_buffer = {}
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -380,6 +381,11 @@ def init_db():
     cursor.execute("""
         ALTER TABLE memories
         ADD COLUMN IF NOT EXISTS media_file_id TEXT
+            """)
+
+    cursor.execute("""
+        ALTER TABLE memoriesЫ
+        ADD COLUMN IF NOT EXISTS media_file_ids TEXT DEFAULT '[]'
     """)
 
     conn.commit()
@@ -397,7 +403,8 @@ def save_memory(
     source_chat_id: int | None = None,
     source_link: str | None = None,
     media_type: str | None = None,
-    media_file_id: str | None = None
+    media_file_id: str | None = None,
+    media_file_ids: list | None = None
 ):
     metadata = generate_memory_metadata(text)
 
@@ -411,9 +418,9 @@ def save_memory(
         INSERT INTO memories (
             user_id, username, text, created_at, category, content_type, tags,
             source_title, source_username, source_chat_id, source_link,
-            media_type, media_file_id
+            media_type, media_file_id, media_file_ids
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         user_id,
@@ -428,7 +435,8 @@ def save_memory(
         source_chat_id,
         source_link,
         media_type,
-        media_file_id
+        media_file_id,
+        json.dumps(media_file_ids or [], ensure_ascii=False)
     ))
 
     memory_id = cursor.fetchone()[0]
@@ -1778,9 +1786,93 @@ async def pin_memory_callback(callback: CallbackQuery):
 
     await callback.answer(text)   
 
+async def save_media_group_later(group_id: str):
+    await asyncio.sleep(2)
+
+    group = media_group_buffer.pop(group_id, None)
+
+    if not group:
+        return
+
+    message = group["message"]
+    source = group["source"]
+    media_items = group["media_items"]
+
+    text = group.get("caption") or "Медиа без подписи"
+
+    first_media = media_items[0]
+
+    metadata = save_memory(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        text=text,
+        content_type_override="🖼 фото" if first_media["type"] == "photo" else "🎬 видео",
+        source_title=source["source_title"],
+        source_username=source["source_username"],
+        source_chat_id=source["source_chat_id"],
+        source_link=source["source_link"],
+        media_type="album",
+        media_file_id=first_media["file_id"],
+        media_file_ids=[
+            item["file_id"]
+            for item in media_items
+        ]
+    )
+
+    formatted_tags = format_tags(metadata.get("tags", []))
+    preview = make_preview(text)
+
+    source_line = ""
+    if source["source_title"]:
+        source_line = f"📣 {source['source_title']}\n"
+
+    await message.answer(
+        f"🖼 Медиа-пост сохранён\n\n"
+        f"{source_line}"
+        f"📝 {preview}\n"
+        f"🏷 {formatted_tags}",
+        reply_markup=get_memory_card_keyboard(
+            metadata["memory_id"],
+            False
+        )
+    )
+
 @dp.message(lambda message: message.photo or message.video)
 async def media_handler(message: Message):
     source = extract_forward_source(message)
+
+    if message.photo:
+        current_media = {
+            "type": "photo",
+            "file_id": message.photo[-1].file_id
+        }
+    else:
+        current_media = {
+            "type": "video",
+            "file_id": message.video.file_id
+        }
+
+    if message.media_group_id:
+        group_id = str(message.media_group_id)
+
+        if group_id not in media_group_buffer:
+            media_group_buffer[group_id] = {
+                "message": message,
+                "source": source,
+                "caption": message.caption,
+                "media_items": []
+            }
+
+            asyncio.create_task(
+                save_media_group_later(group_id)
+            )
+
+        if message.caption:
+            media_group_buffer[group_id]["caption"] = message.caption
+
+        media_group_buffer[group_id]["media_items"].append(current_media)
+
+        return
 
     if message.photo:
         media_type = "photo"
