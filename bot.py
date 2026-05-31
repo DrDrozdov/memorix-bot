@@ -212,6 +212,10 @@ def get_save_title(content_type):
         "фото": "🖼 Фото сохранено",
         "🖼 фото": "🖼 Фото сохранено",
 
+        "video_note": "⭕ Кружок сохранён",
+        "кружок": "⭕ Кружок сохранён",
+        "⭕ кружок": "⭕ Кружок сохранён",
+
         "video": "🎬 Видео сохранено",
         "видео": "🎬 Видео сохранено",
         "🎬 видео": "🎬 Видео сохранено",
@@ -1990,6 +1994,8 @@ async def full_memory_handler(callback: CallbackQuery):
         for file_id in file_ids:
             if media_type == "video":
                 await callback.message.answer_video(file_id)
+            elif media_type == "video_note":
+                await callback.message.answer_video_note(file_id)
             else:
                 await callback.message.answer_photo(file_id)
 
@@ -2331,7 +2337,35 @@ async def save_media_group_later(group_id: str):
         )
     )
 
-@dp.message(lambda message: message.photo or message.video)
+async def transcribe_video_note(message: Message):
+    temp_path = None
+
+    try:
+        file = await bot.get_file(message.video_note.file_id)
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_file:
+            temp_path = temp_file.name
+
+        await bot.download_file(file.file_path, temp_path)
+
+        with open(temp_path, "rb") as video_file:
+            transcription = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=video_file,
+                language="ru"
+            )
+
+        return transcription.text.strip()
+
+    except Exception as error:
+        print(f"Video note transcription error: {error}")
+        return ""
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@dp.message(lambda message: message.photo or message.video or message.video_note)
 async def media_handler(message: Message):
     source = extract_forward_source(message)
 
@@ -2340,10 +2374,15 @@ async def media_handler(message: Message):
             "type": "photo",
             "file_id": message.photo[-1].file_id
         }
-    else:
+    elif message.video:
         current_media = {
             "type": "video",
             "file_id": message.video.file_id
+        }
+    else:
+        current_media = {
+            "type": "video_note",
+            "file_id": message.video_note.file_id
         }
 
     if message.media_group_id:
@@ -2374,14 +2413,26 @@ async def media_handler(message: Message):
         content_type = "🖼 фото"
         title = "🖼 Фото сохранено"
         fallback_text = "Фото без подписи"
-    else:
+
+    elif message.video:
         media_type = "video"
         media_file_id = message.video.file_id
         content_type = "🎬 видео"
         title = "🎬 Видео сохранено"
         fallback_text = "Видео без подписи"
 
-    text = message.caption or fallback_text
+    else:
+        media_type = "video_note"
+        media_file_id = message.video_note.file_id
+        content_type = "⭕ кружок"
+        title = "⭕ Кружок сохранён"
+        fallback_text = "Кружок без расшифровки"
+
+    if message.video_note:
+        transcribed_text = await transcribe_video_note(message)
+        text = transcribed_text or fallback_text
+    else:
+        text = message.caption or fallback_text
 
     metadata = save_memory(
         user_id=message.from_user.id,
