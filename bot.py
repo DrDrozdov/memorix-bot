@@ -384,7 +384,7 @@ def init_db():
             """)
 
     cursor.execute("""
-        ALTER TABLE memoriesЫ
+        ALTER TABLE memories
         ADD COLUMN IF NOT EXISTS media_file_ids TEXT DEFAULT '[]'
     """)
 
