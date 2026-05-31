@@ -1181,30 +1181,10 @@ async def pinned_memories_handler(message: Message):
         )
         return
 
-    response = "📌 Закреплённые записи\n\n"
-
-    for row in rows:
-        memory_id = row[0]
-        text = row[1]
-        created_at = row[2]
-        category = row[3]
-        tags = row[5]
-
-        formatted_tags = format_tags(tags)
-        preview = make_preview(text)
-
-        response += (
-            f"📌 {category}\n"
-            f"🕒 {to_moscow_time(created_at).strftime('%d.%m %H:%M')} МСК\n"
-            f"📝 {preview}\n"
-        )
-
-        if formatted_tags:
-            response += f"🏷 {formatted_tags}\n"
-
-        response += "\n"
-
-    await message.answer(response)    
+    await message.answer(
+        build_search_response(rows),
+        reply_markup=build_search_keyboard(rows)
+    )
 
 @dp.message(Command("reset"))
 async def reset_handler(message: Message):
@@ -1537,7 +1517,7 @@ def get_pinned_memories(user_id: int, limit: int = 10):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, text, created_at, category, content_type, tags
+        SELECT id, text, created_at, category, content_type, tags, pinned
         FROM memories
         WHERE user_id = %s AND pinned = TRUE
         ORDER BY id DESC
