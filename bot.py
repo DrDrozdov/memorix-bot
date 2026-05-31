@@ -9,6 +9,10 @@ from datetime import datetime, timedelta
 import psycopg2
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
+
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+
 from aiogram.types import (
     Message,
     BotCommand,
@@ -50,6 +54,12 @@ client = OpenAI(
     api_key=OPENAI_API_KEY,
     base_url="https://api.aitunnel.ru/v1/"
 )
+
+class EditMemoryState(StatesGroup):
+    waiting_for_text = State()
+
+class EditTagsState(StatesGroup):
+    waiting_for_tags = State()
 
 def to_moscow_time(dt):
     return dt + timedelta(hours=3)
@@ -307,6 +317,14 @@ def get_memory_card_keyboard(memory_id: int, pinned: bool = False):
                 InlineKeyboardButton(
                     text="🔎 Похожее",
                     callback_data=f"similar_memory:{memory_id}"
+                ),
+                InlineKeyboardButton(
+                    text="✏️ Изменить",
+                    callback_data=f"edit_memory:{memory_id}"
+                ),
+                InlineKeyboardButton(
+                    text="🏷 Теги",
+                    callback_data=f"edit_tags:{memory_id}"
                 ),
                 InlineKeyboardButton(
                     text=pin_text,
@@ -1595,6 +1613,51 @@ def delete_memory_by_id(user_id: int, memory_id: int):
 
     return deleted_count > 0
 
+def update_memory_text(
+    user_id: int,
+    memory_id: int,
+    new_text: str
+):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE memories
+        SET text = %s
+        WHERE user_id = %s
+        AND id = %s
+        """,
+        (
+            new_text,
+            user_id,
+            memory_id
+        )
+    )
+
+    conn.commit()
+
+    cursor.close()
+    conn.close()
+
+def update_memory_tags(user_id: int, memory_id: int, tags: list[str]):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE memories
+        SET tags = %s
+        WHERE user_id = %s AND id = %s
+    """, (
+        json.dumps(tags, ensure_ascii=False),
+        user_id,
+        memory_id
+    ))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 def toggle_pin_memory(user_id: int, memory_id: int):
     conn = get_connection()
     cursor = conn.cursor()
@@ -1785,6 +1848,114 @@ async def pin_memory_callback(callback: CallbackQuery):
     )
 
     await callback.answer(text)   
+
+@dp.callback_query(lambda c: c.data.startswith("edit_memory:"))
+async def edit_memory_callback(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    memory_id = int(
+        callback.data.split(":")[1]
+    )
+
+    await state.update_data(
+        memory_id=memory_id
+    )
+
+    await state.set_state(
+        EditMemoryState.waiting_for_text
+    )
+
+    await callback.message.answer(
+        "✏️ Отправь новый текст записи"
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("edit_tags:"))
+async def edit_tags_callback(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    memory_id = int(callback.data.split(":")[1])
+
+    await state.update_data(memory_id=memory_id)
+
+    await state.set_state(EditTagsState.waiting_for_tags)
+
+    await callback.message.answer(
+        "🏷 Отправь новые теги через пробел.\n\n"
+        "Например:\n"
+        "авто audi ремонт"
+    )
+
+    await callback.answer()
+
+@dp.message(EditTagsState.waiting_for_tags)
+async def process_edit_tags(
+    message: Message,
+    state: FSMContext
+):
+    data = await state.get_data()
+    memory_id = data["memory_id"]
+
+    raw_tags = message.text.strip().split()
+
+    tags = []
+
+    for tag in raw_tags:
+        clean_tag = (
+            tag.lower()
+            .replace("#", "")
+            .replace(" ", "")
+            .replace("-", "")
+            .strip()
+        )
+
+        if clean_tag and clean_tag not in tags:
+            tags.append(clean_tag)
+
+    tags = tags[:5]
+
+    if not tags:
+        await message.answer(
+            "Не вижу тегов. Отправь, например:\nавто audi ремонт"
+        )
+        return
+
+    update_memory_tags(
+        message.from_user.id,
+        memory_id,
+        tags
+    )
+
+    await state.clear()
+
+    await message.answer(
+        "✅ Теги обновлены\n\n"
+        f"{format_tags(tags)}"
+    )
+
+@dp.message(EditMemoryState.waiting_for_text)
+async def process_edit_memory(
+    message: Message,
+    state: FSMContext
+):
+    data = await state.get_data()
+
+    memory_id = data["memory_id"]
+
+    update_memory_text(
+        message.from_user.id,
+        memory_id,
+        message.text
+    )
+
+    await state.clear()
+
+    await message.answer(
+        "✅ Запись обновлена"
+    )
 
 async def save_media_group_later(group_id: str):
     await asyncio.sleep(2)
