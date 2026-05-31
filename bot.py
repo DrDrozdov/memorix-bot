@@ -554,13 +554,15 @@ def build_search_response(selected_rows):
     response = f"🧠 Нашёл {len(selected_rows)} записи\n\n"
 
     for index, row in enumerate(selected_rows, start=1):
-        memory_id, text, created_at, category, content_type, tags = row
+        memory_id, text, created_at, category, content_type, tags, pinned = row
 
         preview = make_memory_preview(text)
         date_text = format_moscow_datetime(created_at)
         tag_text = format_tags(tags)
 
-        response += f"{index}. {category} Запись из памяти\n"
+        pin_icon = "📌 " if pinned else ""
+
+        response += f"{index}. {pin_icon}{category} Запись из памяти\n"
         response += f"🕒 {date_text}\n"
         response += f"{content_type}\n"
 
