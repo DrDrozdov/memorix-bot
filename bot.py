@@ -47,6 +47,9 @@ main_keyboard = ReplyKeyboardMarkup(
         [
             KeyboardButton(text="📌 Закреплённые"),
             KeyboardButton(text="🏷 Теги")
+        ],
+        [
+            KeyboardButton(text="📂 Категории")
         ]
     ],
     resize_keyboard=True
@@ -548,6 +551,25 @@ def get_all_user_tags(user_id: int):
         reverse=True
     )
 
+def get_all_user_categories(user_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT category, COUNT(*)
+        FROM memories
+        WHERE user_id = %s
+        GROUP BY category
+        ORDER BY COUNT(*) DESC
+    """, (user_id,))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
+
 def search_memories(user_id: int, query: str, limit: int = 10):
     conn = get_connection()
     cursor = conn.cursor()
@@ -594,6 +616,30 @@ def search_memories_by_tag(user_id: int, tag: str, limit: int = 10):
     """, (
         user_id,
         f"%{clean_tag}%",
+        limit
+    ))
+
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    return rows
+
+def search_memories_by_category(user_id: int, category: str, limit: int = 10):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, text, created_at, category, content_type, tags, pinned
+        FROM memories
+        WHERE user_id = %s
+        AND category = %s
+        ORDER BY pinned DESC, id DESC
+        LIMIT %s
+    """, (
+        user_id,
+        category,
         limit
     ))
 
@@ -818,6 +864,19 @@ def build_search_keyboard(selected_rows):
             InlineKeyboardButton(
                 text=pin_text,
                 callback_data=f"pin_memory:{memory_id}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def build_categories_keyboard(categories):
+    keyboard = []
+
+    for category, count in categories:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"{category} — {count}",
+                callback_data=f"category:{category}"
             )
         ])
 
@@ -1692,12 +1751,30 @@ async def tags_button_handler(message: Message):
 
     await message.answer(response)
 
+@dp.message(lambda message: message.text == "📂 Категории")
+async def categories_button_handler(message: Message):
+    categories = get_all_user_categories(message.from_user.id)
+
+    if not categories:
+        await message.answer("📂 Категорий пока нет.")
+        return
+
+    await message.answer(
+        "📂 Категории памяти\n\n"
+        "Выбери категорию:",
+        reply_markup=build_categories_keyboard(categories)
+    )
+
 def get_memory_by_id(user_id: int, memory_id: int):
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, text, created_at, category, content_type, tags
+        SELECT 
+            id, text, created_at, category, content_type, tags,
+            source_title, source_link,
+            media_type, media_file_id, media_file_ids,
+            pinned
         FROM memories
         WHERE user_id = %s AND id = %s
     """, (user_id, memory_id))
@@ -1857,16 +1934,64 @@ async def full_memory_handler(callback: CallbackQuery):
         await callback.answer("Запись не найдена.")
         return
 
-    memory_id, text, created_at, category, content_type, tags = row
+    (
+        memory_id,
+        text,
+        created_at,
+        category,
+        content_type,
+        tags,
+        source_title,
+        source_link,
+        media_type,
+        media_file_id,
+        media_file_ids,
+        pinned
+    ) = row
 
-    await callback.message.answer(
-        f"📄 Полная запись\n"
+    source_line = ""
+
+    if source_title:
+        source_line = f"📣 {source_title}\n"
+
+    if source_link:
+        source_line += f"🔗 {source_link}\n"
+
+    tag_text = format_tags(tags)
+
+    response = (
+        f"📄 Полная запись\n\n"
+        f"{source_line}"
         f"{category}\n"
         f"{content_type}\n"
-        f"🏷 {format_tags(tags)}\n"
+        f"🏷 {tag_text}\n"
         f"🕒 {format_moscow_datetime(created_at)}\n\n"
         f"{text}"
     )
+
+    await callback.message.answer(response)
+
+    file_ids = []
+
+    if media_file_ids:
+        try:
+            file_ids = json.loads(media_file_ids)
+        except Exception:
+            file_ids = []
+
+    if not file_ids and media_file_id:
+        file_ids = [media_file_id]
+
+    if file_ids:
+        await callback.message.answer(
+            f"📎 Медиафайлов: {len(file_ids)}"
+        )
+
+        for file_id in file_ids:
+            if media_type == "video":
+                await callback.message.answer_video(file_id)
+            else:
+                await callback.message.answer_photo(file_id)
 
     await callback.answer()
 
@@ -2044,6 +2169,29 @@ async def edit_tags_callback(
         "Например:\n"
         "работа обучение идеи\n\n"
         "Старые теги будут заменены."
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda callback: callback.data.startswith("category:"))
+async def category_callback(callback: CallbackQuery):
+    category = callback.data.replace("category:", "", 1)
+
+    rows = search_memories_by_category(
+        callback.from_user.id,
+        category
+    )
+
+    if not rows:
+        await callback.answer(
+            "В этой категории пока нет записей.",
+            show_alert=True
+        )
+        return
+
+    await callback.message.answer(
+        build_search_response(rows),
+        reply_markup=build_search_keyboard(rows)
     )
 
     await callback.answer()
