@@ -38,6 +38,9 @@ main_keyboard = ReplyKeyboardMarkup(
         [
             KeyboardButton(text="📅 Сегодня"),
             KeyboardButton(text="⚙️ Помощь")
+        ],
+        [
+            KeyboardButton(text="📌 Закреплённые")
         ]
     ],
     resize_keyboard=True
@@ -1462,6 +1465,9 @@ async def today_button_handler(message: Message):
 async def help_button_handler(message: Message):
     await help_handler(message)
 
+@dp.message(lambda message: message.text == "📌 Закреплённые")
+async def pinned_button_handler(message: Message):
+    await pinned_memories_handler(message)
 
 @dp.message(lambda message: message.text == "🔍 Поиск")
 async def search_button_handler(message: Message):
