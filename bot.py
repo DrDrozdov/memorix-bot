@@ -329,18 +329,20 @@ def get_after_edit_keyboard(memory_id: int, pinned: bool = False):
                     callback_data=f"pin_memory:{memory_id}"
                 ),
                 InlineKeyboardButton(
-                    text="🏷 Изменить теги",
+                    text="🗑 Удалить",
+                    callback_data=f"delete_memory:{memory_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🏷 Изм. теги",
                     callback_data=f"edit_tags:{memory_id}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="📂 Изменить категорию",
+                    text="📂 Изм. категорию",
                     callback_data=f"edit_category:{memory_id}"
-                ),
-                InlineKeyboardButton(
-                    text="🗑 Удалить",
-                    callback_data=f"delete_memory:{memory_id}"
                 )
             ]
         ]
@@ -2298,9 +2300,7 @@ async def edit_memory_callback(
 
     await state.update_data(
         memory_id=memory_id,
-        old_text=old_text,
-        edit_chat_id=callback.message.chat.id,
-        edit_message_id=callback.message.message_id
+        old_text=old_text
     )
 
     await state.set_state(
@@ -2514,8 +2514,6 @@ async def process_edit_memory(
 
     memory_id = data["memory_id"]
     old_text = data.get("old_text", "")
-    edit_chat_id = data.get("edit_chat_id")
-    edit_message_id = data.get("edit_message_id")
 
     update_memory_text(
         message.from_user.id,
@@ -2527,6 +2525,11 @@ async def process_edit_memory(
         message.from_user.id,
         memory_id
     )
+
+    if not row:
+        await message.answer("Запись не найдена.")
+        await state.clear()
+        return
 
     (
         memory_id,
@@ -2543,37 +2546,24 @@ async def process_edit_memory(
         pinned
     ) = row
 
-    tag_text = format_tags(tags)
-
     response = (
         "Обновлено 🔄\n\n"
         f"{category}\n"
         f"{content_type}\n"
-        f"🏷 {tag_text}\n\n"
+        f"🏷 {format_tags(tags)}\n\n"
         "Старая версия:\n"
         f"{old_text}\n\n"
         "Новая версия:\n"
         f"{text}"
     )
 
-    if edit_chat_id and edit_message_id:
-        await bot.edit_message_text(
-            chat_id=edit_chat_id,
-            message_id=edit_message_id,
-            text=response,
-            reply_markup=get_after_edit_keyboard(
-                memory_id,
-                pinned
-            )
+    await message.answer(
+        response,
+        reply_markup=get_after_edit_keyboard(
+            memory_id,
+            pinned
         )
-    else:
-        await message.answer(
-            response,
-            reply_markup=get_after_edit_keyboard(
-                memory_id,
-                pinned
-            )
-        )
+    )
 
     await state.clear()
 
