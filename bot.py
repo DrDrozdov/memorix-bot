@@ -65,6 +65,9 @@ client = OpenAI(
 class EditMemoryState(StatesGroup):
     waiting_for_text = State()
 
+class EditCategoryState(StatesGroup):
+    waiting_for_category = State()
+
 class EditTagsState(StatesGroup):
     waiting_for_tags = State()
 
@@ -315,6 +318,34 @@ def format_tags(tags):
 
     return " ".join(f"#{tag}" for tag in limited_tags)
 
+def get_after_edit_keyboard(memory_id: int, pinned: bool = False):
+    pin_text = "📍 Открепить" if pinned else "📌 Закрепить"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=pin_text,
+                    callback_data=f"pin_memory:{memory_id}"
+                ),
+                InlineKeyboardButton(
+                    text="🏷 Изменить теги",
+                    callback_data=f"edit_tags:{memory_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📂 Изменить категорию",
+                    callback_data=f"edit_category:{memory_id}"
+                ),
+                InlineKeyboardButton(
+                    text="🗑 Удалить",
+                    callback_data=f"delete_memory:{memory_id}"
+                )
+            ]
+        ]
+    )
+
 def get_memory_card_keyboard(memory_id: int, pinned: bool = False):
     pin_text = "📍 Открепить" if pinned else "📌 Закрепить"
 
@@ -340,8 +371,12 @@ def get_memory_card_keyboard(memory_id: int, pinned: bool = False):
                     callback_data=f"edit_memory:{memory_id}"
                 ),
                 InlineKeyboardButton(
-                    text="🏷 Теги",
+                    text="🏷 Изменить теги",
                     callback_data=f"edit_tags:{memory_id}"
+                ),
+                InlineKeyboardButton(
+                    text="📂 Изменить категорию",
+                    callback_data=f"edit_category:{memory_id}"
                 )
             ]
         ]
@@ -917,6 +952,33 @@ def build_content_types_keyboard():
             ]
         ]
     )
+
+def build_edit_category_keyboard(memory_id: int):
+    categories = [
+        "💼 Работа",
+        "📚 Учёба",
+        "🚗 Авто",
+        "💰 Финансы",
+        "🎨 Дизайн",
+        "💻 Техника",
+        "🧠 Идеи",
+        "🏠 Быт",
+        "🔒 Приватное",
+        "🔗 Материалы",
+        "📦 Разное"
+    ]
+
+    keyboard = []
+
+    for category in categories:
+        keyboard.append([
+            InlineKeyboardButton(
+                text=category,
+                callback_data=f"set_category:{memory_id}:{category}"
+            )
+        ])
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def build_categories_keyboard(categories):
     keyboard = []
@@ -1917,6 +1979,24 @@ def update_memory_text(
     cursor.close()
     conn.close()
 
+def update_memory_category(user_id: int, memory_id: int, category: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE memories
+        SET category = %s
+        WHERE user_id = %s AND id = %s
+    """, (
+        category,
+        user_id,
+        memory_id
+    ))
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
 def update_memory_tags(user_id: int, memory_id: int, tags: list[str]):
     conn = get_connection()
     cursor = conn.cursor()
@@ -2214,10 +2294,13 @@ async def edit_memory_callback(
         await callback.answer("Запись не найдена.", show_alert=True)
         return
 
-    current_text = row[1]
+    old_text = row[1]
 
     await state.update_data(
-        memory_id=memory_id
+        memory_id=memory_id,
+        old_text=old_text,
+        edit_chat_id=callback.message.chat.id,
+        edit_message_id=callback.message.message_id
     )
 
     await state.set_state(
@@ -2226,7 +2309,7 @@ async def edit_memory_callback(
 
     await callback.message.answer(
         "✏️ Текущий текст / подпись:\n\n"
-        f"{current_text}\n\n"
+        f"{old_text}\n\n"
         "Отправь новый текст.\n"
         "Он заменит текст записи или станет подписью к медиа."
     )
@@ -2264,6 +2347,68 @@ async def edit_tags_callback(
     )
 
     await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("edit_category:"))
+async def edit_category_callback(callback: CallbackQuery):
+    memory_id = int(callback.data.split(":")[1])
+
+    await callback.message.answer(
+        "📂 Выбери новую категорию:",
+        reply_markup=build_edit_category_keyboard(memory_id)
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("set_category:"))
+async def set_category_callback(callback: CallbackQuery):
+    parts = callback.data.split(":", 2)
+
+    memory_id = int(parts[1])
+    category = parts[2]
+
+    update_memory_category(
+        callback.from_user.id,
+        memory_id,
+        category
+    )
+
+    row = get_memory_by_id(
+        callback.from_user.id,
+        memory_id
+    )
+
+    if not row:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+
+    (
+        memory_id,
+        text,
+        created_at,
+        category,
+        content_type,
+        tags,
+        source_title,
+        source_link,
+        media_type,
+        media_file_id,
+        media_file_ids,
+        pinned
+    ) = row
+
+    await callback.message.answer(
+        "Категория обновлена 🔄\n\n"
+        f"{category}\n"
+        f"{content_type}\n"
+        f"🏷 {format_tags(tags)}\n\n"
+        f"{make_memory_preview(text)}",
+        reply_markup=get_after_edit_keyboard(
+            memory_id,
+            pinned
+        )
+    )
+
+    await callback.answer("Категория обновлена")
 
 @dp.callback_query(lambda callback: callback.data.startswith("category:"))
 async def category_callback(callback: CallbackQuery):
@@ -2316,7 +2461,7 @@ async def process_edit_tags(
 
     if not tags:
         await message.answer(
-            "Не вижу тегов. Отправь, например:\nавто audi ремонт"
+            "Не вижу тегов. Отправь, например:\nработа идеи проект"
         )
         return
 
@@ -2333,12 +2478,30 @@ async def process_edit_tags(
         memory_id
     )
 
+    (
+        memory_id,
+        text,
+        created_at,
+        category,
+        content_type,
+        tags,
+        source_title,
+        source_link,
+        media_type,
+        media_file_id,
+        media_file_ids,
+        pinned
+    ) = row
+
     await message.answer(
-        "✅ Теги обновлены\n\n"
-        + build_single_memory_response(row).replace("✅ Запись обновлена\n\n", ""),
-        reply_markup=get_memory_card_keyboard(
+        "Теги обновлены 🔄\n\n"
+        f"{category}\n"
+        f"{content_type}\n"
+        f"🏷 {format_tags(tags)}\n\n"
+        f"{make_memory_preview(text)}",
+        reply_markup=get_after_edit_keyboard(
             memory_id,
-            False
+            pinned
         )
     )
 
@@ -2350,6 +2513,9 @@ async def process_edit_memory(
     data = await state.get_data()
 
     memory_id = data["memory_id"]
+    old_text = data.get("old_text", "")
+    edit_chat_id = data.get("edit_chat_id")
+    edit_message_id = data.get("edit_message_id")
 
     update_memory_text(
         message.from_user.id,
@@ -2357,20 +2523,59 @@ async def process_edit_memory(
         message.text
     )
 
-    await state.clear()
-
     row = get_memory_by_id(
         message.from_user.id,
         memory_id
     )
 
-    await message.answer(
-        build_single_memory_response(row),
-        reply_markup=get_memory_card_keyboard(
-            memory_id,
-            False
-        )
+    (
+        memory_id,
+        text,
+        created_at,
+        category,
+        content_type,
+        tags,
+        source_title,
+        source_link,
+        media_type,
+        media_file_id,
+        media_file_ids,
+        pinned
+    ) = row
+
+    tag_text = format_tags(tags)
+
+    response = (
+        "Обновлено 🔄\n\n"
+        f"{category}\n"
+        f"{content_type}\n"
+        f"🏷 {tag_text}\n\n"
+        "Старая версия:\n"
+        f"{old_text}\n\n"
+        "Новая версия:\n"
+        f"{text}"
     )
+
+    if edit_chat_id and edit_message_id:
+        await bot.edit_message_text(
+            chat_id=edit_chat_id,
+            message_id=edit_message_id,
+            text=response,
+            reply_markup=get_after_edit_keyboard(
+                memory_id,
+                pinned
+            )
+        )
+    else:
+        await message.answer(
+            response,
+            reply_markup=get_after_edit_keyboard(
+                memory_id,
+                pinned
+            )
+        )
+
+    await state.clear()
 
 async def save_media_group_later(group_id: str):
     await asyncio.sleep(2)
