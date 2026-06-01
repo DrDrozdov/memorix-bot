@@ -335,13 +335,13 @@ def get_after_edit_keyboard(memory_id: int, pinned: bool = False):
             ],
             [
                 InlineKeyboardButton(
-                    text="🏷 Изм. теги",
+                    text="🏷 Ред. теги",
                     callback_data=f"edit_tags:{memory_id}"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="📂 Изм. категорию",
+                    text="📂 Ред. категорию",
                     callback_data=f"edit_category:{memory_id}"
                 )
             ]
@@ -373,11 +373,11 @@ def get_memory_card_keyboard(memory_id: int, pinned: bool = False):
                     callback_data=f"edit_memory:{memory_id}"
                 ),
                 InlineKeyboardButton(
-                    text="🏷 Изменить теги",
+                    text="🏷 Ред. теги",
                     callback_data=f"edit_tags:{memory_id}"
                 ),
                 InlineKeyboardButton(
-                    text="📂 Изменить категорию",
+                    text="📂 Ред. категорию",
                     callback_data=f"edit_category:{memory_id}"
                 )
             ]
