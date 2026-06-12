@@ -1979,28 +1979,34 @@ def update_memory_text(
     user_id: int,
     memory_id: int,
     new_text: str,
-    formatted_text: str | None = None
+    formatted_text: str | None = None,
+    media_type: str | None = None,
+    media_file_id: str | None = None,
+    media_file_ids: list | None = None
 ):
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute(
-        """
+    cursor.execute("""
         UPDATE memories
-        SET text = %s
-        WHERE user_id = %s
-        AND id = %s
-        """,
-        (
-            new_text,
-            formatted_text,
-            user_id,
-            memory_id
-        )
-    )
+        SET 
+            text = %s,
+            formatted_text = %s,
+            media_type = COALESCE(%s, media_type),
+            media_file_id = COALESCE(%s, media_file_id),
+            media_file_ids = COALESCE(%s, media_file_ids)
+        WHERE user_id = %s AND id = %s
+    """, (
+        new_text,
+        formatted_text,
+        media_type,
+        media_file_id,
+        json.dumps(media_file_ids, ensure_ascii=False) if media_file_ids is not None else None,
+        user_id,
+        memory_id
+    ))
 
     conn.commit()
-
     cursor.close()
     conn.close()
 
@@ -2578,11 +2584,48 @@ async def process_edit_memory(
     memory_id = data["memory_id"]
     old_text = data.get("old_text", "")
 
+    new_text = message.text or message.caption
+
+    if not new_text:
+        await message.answer(
+            "✏️ Отправь текст или медиа с подписью."
+        )
+        return
+
+    formatted_text = message.html_text or message.html_caption
+
+    media_type = None
+    media_file_id = None
+    media_file_ids = None
+
+    if message.photo:
+        media_type = "photo"
+        media_file_id = message.photo[-1].file_id
+        media_file_ids = [media_file_id]
+
+    elif message.video:
+        media_type = "video"
+        media_file_id = message.video.file_id
+        media_file_ids = [media_file_id]
+
+    elif message.video_note:
+        media_type = "video_note"
+        media_file_id = message.video_note.file_id
+        media_file_ids = [media_file_id]
+
+    elif message.voice:
+        media_type = "voice"
+        media_file_id = message.voice.file_id
+        media_file_ids = [media_file_id]
+
     update_memory_text(
-        message.from_user.id,
-        memory_id,
-        message.text,
-        message.html_text
+        user_id=message.from_user.id,
+        memory_id=memory_id,
+        new_text=new_text,
+        formatted_text=formatted_text,
+        media_type=media_type,
+        media_file_id=media_file_id,
+        media_file_ids=media_file_ids
     )
 
     row = get_memory_by_id(
