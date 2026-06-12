@@ -471,7 +471,7 @@ def save_memory(
     user_id: int,
     username: str | None,
     text: str,
-    formatted_text: str | None = None
+    formatted_text: str | None = None,
     content_type_override: str | None = None,
     source_title: str | None = None,
     source_username: str | None = None,
