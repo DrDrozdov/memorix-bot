@@ -491,9 +491,21 @@ def save_memory(
 
     cursor.execute("""
         INSERT INTO memories (
-            user_id, username, text, created_at, category, content_type, tags,
-            source_title, source_username, source_chat_id, source_link,
-            media_type, media_file_id, media_file_ids, formatted_text
+            user_id,
+            username,
+            text,
+            formatted_text,
+            created_at,
+            category,
+            content_type,
+            tags,
+            source_title,
+            source_username,
+            source_chat_id,
+            source_link,
+            media_type,
+            media_file_id,
+            media_file_ids
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
