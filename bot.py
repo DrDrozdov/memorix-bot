@@ -224,6 +224,11 @@ def get_save_title(content_type):
         "кружок": "⭕ Кружок сохранён",
         "⭕ кружок": "⭕ Кружок сохранён",
 
+        "document": "📎 Файл сохранён",
+        "file": "📎 Файл сохранён",
+        "файл": "📎 Файл сохранён",
+        "📎 файл": "📎 Файл сохранён",
+
         "video": "🎬 Видео сохранено",
         "видео": "🎬 Видео сохранено",
         "🎬 видео": "🎬 Видео сохранено",
@@ -986,6 +991,9 @@ def build_content_types_keyboard():
                 InlineKeyboardButton(text="⭕ Кружки", callback_data="type:⭕ кружок")
             ],
             [
+                InlineKeyboardButton(text="📎 Файлы", callback_data="type:📎 файл")
+            ],
+            [
                 InlineKeyboardButton(
                     text="⬅️ Назад",
                     callback_data="back:main"
@@ -1670,6 +1678,19 @@ async def pinned_memories_handler(message: Message):
         reply_markup=build_search_keyboard(rows)
     )
 
+@dp.message(Command("cancel"))
+async def cancel_command_handler(
+    message: Message,
+    state: FSMContext
+):
+    current_state = await state.get_state()
+
+    if current_state:
+        await state.clear()
+        await message.answer("Действие отменено.")
+    else:
+        await message.answer("Нечего отменять.")
+
 @dp.message(Command("reset"))
 async def reset_handler(message: Message):
     keyboard = InlineKeyboardMarkup(
@@ -1936,7 +1957,8 @@ async def pinned_button_handler(message: Message):
 @dp.message(lambda message: message.text == "🔍 Поиск")
 async def search_button_handler(message: Message):
     await message.answer(
-        "Напиши:\n/search твой запрос"
+        "Напиши:\n/search твой запрос",
+        reply_markup=simple_back_keyboard("cancel_search")
     )
 
 @dp.message(lambda message: message.text == "🧩 Типы контента")
@@ -2264,6 +2286,15 @@ async def full_memory_handler(callback: CallbackQuery):
         )
         await callback.message.answer_video_note(file_ids[0])
 
+    elif file_ids and media_type == "document":
+        await callback.message.answer(
+            response,
+            parse_mode="HTML"
+        )
+
+        for file_id in file_ids:
+            await callback.message.answer_document(file_id)
+
     else:
         await callback.message.answer(
             response,
@@ -2575,6 +2606,13 @@ async def category_callback(callback: CallbackQuery):
 
     await callback.answer()
 
+@dp.callback_query(lambda c: c.data == "cancel_search")
+async def cancel_search_callback(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "Поиск отменён."
+    )
+    await callback.answer()
+
 @dp.callback_query(lambda c: c.data == "cancel_edit")
 async def cancel_edit_callback(
     callback: CallbackQuery,
@@ -2632,6 +2670,13 @@ async def process_edit_tags(
     message: Message,
     state: FSMContext
 ):
+    data = await state.get_data()
+    memory_id = data.get("memory_id")
+
+    if not memory_id:
+        await state.clear()
+        await message.answer("Редактирование отменено: запись не найдена.")
+        return
 
     if not message.text:
         await message.answer(
@@ -2752,7 +2797,15 @@ async def process_edit_memory(
 
         return
 
-    new_text = message.text or message.caption
+    new_text = (
+        message.text
+        or message.caption
+        or (
+            f"Файл: {message.document.file_name}"
+            if message.document
+            else None
+        )
+    )
 
     if not new_text:
         await message.answer(
@@ -2785,6 +2838,11 @@ async def process_edit_memory(
         media_type = "voice"
         media_file_id = message.voice.file_id
         media_file_ids = [media_file_id]
+
+    elif message.document:
+    media_type = "document"
+    media_file_id = message.document.file_id
+    media_file_ids = [media_file_id]
 
     update_memory_text(
         user_id=message.from_user.id,
@@ -3156,6 +3214,57 @@ async def cancel_text_handler(
         "Действие отменено."
     )
 
+@dp.message(lambda message: message.document)
+async def document_handler(message: Message):
+    source = extract_forward_source(message)
+
+    document = message.document
+
+    file_name = document.file_name or "Файл без названия"
+    mime_type = document.mime_type or "unknown"
+
+    text = message.caption or f"Файл: {file_name}"
+    formatted_text = message.html_caption if message.caption else None
+
+    metadata = save_memory(
+        user_id=message.from_user.id,
+        username=message.from_user.username,
+        text=text,
+        formatted_text=formatted_text,
+        content_type_override="📎 файл",
+        source_title=source["source_title"],
+        source_username=source["source_username"],
+        source_chat_id=source["source_chat_id"],
+        source_link=source["source_link"],
+        media_type="document",
+        media_file_id=document.file_id,
+        media_file_ids=[document.file_id]
+    )
+
+    formatted_tags = format_tags(
+        metadata.get("tags", [])
+    )
+
+    preview = make_preview(text)
+
+    source_line = ""
+
+    if source["source_title"]:
+        source_line = f"📣 {source['source_title']}\n"
+
+    await message.answer(
+        f"📎 Файл сохранён\n\n"
+        f"{source_line}"
+        f"📄 {file_name}\n"
+        f"🧾 {mime_type}\n"
+        f"📝 {preview}\n"
+        f"🏷 {formatted_tags}",
+        reply_markup=get_memory_card_keyboard(
+            metadata["memory_id"],
+            False
+        )
+    )
+
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
@@ -3229,6 +3338,7 @@ async def main():
     BotCommand(command="reset", description="Сбросить память"),
     BotCommand(command="help", description="Помощь"), 
     BotCommand(command="pinned", description="Закреплённые записи"),
+    BotCommand(command="cancel", description="Отменить текущее действие"),
 ])
     print("Memorix started | VERSION: SEARCH_UI_FIX_002")
     await dp.start_polling(bot)
