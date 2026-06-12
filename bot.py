@@ -35,6 +35,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 media_group_buffer = {}
+edit_media_group_buffer = {}
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [
@@ -318,6 +319,18 @@ def format_tags(tags):
         return ""
 
     return " ".join(f"#{tag}" for tag in limited_tags)
+
+def cancel_edit_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Отмена",
+                    callback_data="cancel_edit"
+                )
+            ]
+        ]
+    )
 
 def get_after_edit_keyboard(memory_id: int, pinned: bool = False):
     pin_text = "📍 Открепить" if pinned else "📌 Закрепить"
@@ -971,6 +984,24 @@ def build_content_types_keyboard():
             [
                 InlineKeyboardButton(text="🎙 Голосовые", callback_data="type:🎙 голосовое"),
                 InlineKeyboardButton(text="⭕ Кружки", callback_data="type:⭕ кружок")
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data="back:main"
+                )
+            ]
+        ]
+    )
+
+def simple_back_keyboard(callback_data: str):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=callback_data
+                )
             ]
         ]
     )
@@ -1000,7 +1031,43 @@ def build_edit_category_keyboard(memory_id: int):
             )
         ])
 
+    keyboard.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data=f"back:memory:{memory_id}"
+        )
+    ])
+
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def build_memory_preview_text(row):
+    (
+        memory_id,
+        text,
+        created_at,
+        category,
+        content_type,
+        tags,
+        source_title,
+        source_link,
+        media_type,
+        media_file_id,
+        media_file_ids,
+        pinned,
+        formatted_text
+    ) = row
+
+    source_line = ""
+    if source_title:
+        source_line = f"📣 {source_title}\n"
+
+    return (
+        f"{source_line}"
+        f"{category}\n"
+        f"{content_type}\n"
+        f"🏷 {format_tags(tags)}\n\n"
+        f"{make_memory_preview(text)}"
+    )
 
 def build_categories_keyboard(categories):
     keyboard = []
@@ -1012,6 +1079,13 @@ def build_categories_keyboard(categories):
                 callback_data=f"category:{category}"
             )
         ])
+
+    keyboard.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад",
+            callback_data="back:main"
+        )
+    ])
 
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -2375,9 +2449,10 @@ async def edit_memory_callback(
     await callback.message.answer(
         "✏️ Текущий текст / подпись:\n\n"
         f"<pre>{safe_old_text}</pre>\n\n"
-        "Отправь новый текст.\n"
-        "Он заменит текст записи или станет подписью к медиа.",
-        parse_mode="HTML"
+        "Отправь новый текст, фото, видео, кружок, голосовое или альбом.\n"
+        "Это заменит текст записи или станет подписью к медиа.",
+        parse_mode="HTML",
+        reply_markup=cancel_edit_keyboard()
     )
     await callback.answer()
 
@@ -2408,7 +2483,8 @@ async def edit_tags_callback(
         "Отправь новые теги через пробел.\n\n"
         "Например:\n"
         "работа обучение идеи\n\n"
-        "Старые теги будут заменены."
+        "Старые теги будут заменены.",
+        reply_markup=simple_back_keyboard(f"back:memory:{memory_id}")
     )
 
     await callback.answer()
@@ -2458,7 +2534,8 @@ async def set_category_callback(callback: CallbackQuery):
         media_type,
         media_file_id,
         media_file_ids,
-        pinned
+        pinned,
+        formatted_text
     ) = row
 
     await callback.message.answer(
@@ -2495,6 +2572,58 @@ async def category_callback(callback: CallbackQuery):
         build_search_response(rows),
         reply_markup=build_search_keyboard(rows)
     )
+
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "cancel_edit")
+async def cancel_edit_callback(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    await state.clear()
+
+    await callback.message.edit_text(
+        "Редактирование отменено."
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda callback: callback.data.startswith("back:"))
+async def back_callback(callback: CallbackQuery):
+    data = callback.data
+
+    if data == "back:main":
+        await callback.message.edit_text(
+            "Главное меню открыто снизу 👇"
+        )
+        await callback.answer()
+        return
+
+    if data.startswith("back:memory:"):
+        memory_id = int(data.split(":")[2])
+
+        row = get_memory_by_id(
+            callback.from_user.id,
+            memory_id
+        )
+
+        if not row:
+            await callback.answer(
+                "Запись не найдена.",
+                show_alert=True
+            )
+            return
+
+        await callback.message.edit_text(
+            build_memory_preview_text(row),
+            reply_markup=get_memory_card_keyboard(
+                memory_id,
+                row[11]
+            )
+        )
+
+        await callback.answer()
+        return
 
     await callback.answer()
 
@@ -2559,7 +2688,8 @@ async def process_edit_tags(
         media_type,
         media_file_id,
         media_file_ids,
-        pinned
+        pinned,
+        formatted_text
     ) = row
 
     await message.answer(
@@ -2583,6 +2713,44 @@ async def process_edit_memory(
 
     memory_id = data["memory_id"]
     old_text = data.get("old_text", "")
+
+    if message.media_group_id and (message.photo or message.video):
+        group_id = str(message.media_group_id)
+
+        if message.photo:
+            current_media = {
+                "type": "photo",
+                "file_id": message.photo[-1].file_id
+            }
+        else:
+            current_media = {
+                "type": "video",
+                "file_id": message.video.file_id
+            }
+
+        if group_id not in edit_media_group_buffer:
+            edit_media_group_buffer[group_id] = {
+                "message": message,
+                "state": state,
+                "state_data": data,
+                "caption": message.caption,
+                "html_caption": message.html_caption,
+                "media_items": []
+            }
+
+            asyncio.create_task(
+                update_media_group_later(group_id)
+            )
+
+        if message.caption:
+            edit_media_group_buffer[group_id]["caption"] = message.caption
+
+        if message.html_caption:
+            edit_media_group_buffer[group_id]["html_caption"] = message.html_caption
+
+        edit_media_group_buffer[group_id]["media_items"].append(current_media)
+
+        return
 
     new_text = message.text or message.caption
 
@@ -2650,7 +2818,8 @@ async def process_edit_memory(
         media_type,
         media_file_id,
         media_file_ids,
-        pinned
+        pinned,
+        formatted_text
     ) = row
 
     safe_old_text = html.escape(old_text)
@@ -2732,6 +2901,90 @@ async def save_media_group_later(group_id: str):
             False
         )
     )
+
+async def update_media_group_later(group_id: str):
+    await asyncio.sleep(2)
+
+    group = edit_media_group_buffer.pop(group_id, None)
+
+    if not group:
+        return
+
+    message = group["message"]
+    state = group["state"]
+    data = group["state_data"]
+
+    memory_id = data["memory_id"]
+    old_text = data.get("old_text", "")
+
+    media_items = group["media_items"]
+    text = group.get("caption") or "Медиа без подписи"
+    formatted_text = group.get("html_caption")
+
+    first_media = media_items[0]
+
+    update_memory_text(
+        user_id=message.from_user.id,
+        memory_id=memory_id,
+        new_text=text,
+        formatted_text=formatted_text,
+        media_type="album",
+        media_file_id=first_media["file_id"],
+        media_file_ids=[
+            item["file_id"]
+            for item in media_items
+        ]
+    )
+
+    row = get_memory_by_id(
+        message.from_user.id,
+        memory_id
+    )
+
+    (
+        memory_id,
+        text,
+        created_at,
+        category,
+        content_type,
+        tags,
+        source_title,
+        source_link,
+        media_type,
+        media_file_id,
+        media_file_ids,
+        pinned,
+        formatted_text
+    ) = row
+
+    safe_old_text = html.escape(old_text)
+    safe_new_text = formatted_text or html.escape(text)
+
+    response = (
+        "Обновлено 🔄\n\n"
+        f"{category}\n"
+        f"{content_type}\n"
+        f"🏷 {format_tags(tags)}\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "СТАРАЯ ВЕРСИЯ\n"
+        "━━━━━━━━━━━━━━\n"
+        f"<pre>{safe_old_text}</pre>\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "НОВАЯ ВЕРСИЯ\n"
+        "━━━━━━━━━━━━━━\n"
+        f"{safe_new_text}"
+    )
+
+    await message.answer(
+        response,
+        reply_markup=get_after_edit_keyboard(
+            memory_id,
+            pinned
+        ),
+        parse_mode="HTML"
+    )
+
+    await state.clear()
 
 async def transcribe_video_note(message: Message):
     temp_path = None
@@ -2886,6 +3139,23 @@ async def tag_search_handler(message: Message):
         reply_markup=build_search_keyboard(rows)
     )
 
+@dp.message(lambda message: message.text in ["Отмена", "отмена", "/cancel"])
+async def cancel_text_handler(
+    message: Message,
+    state: FSMContext
+):
+    current_state = await state.get_state()
+
+    if not current_state:
+        await message.answer("Нечего отменять.")
+        return
+
+    await state.clear()
+
+    await message.answer(
+        "Действие отменено."
+    )
+
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
@@ -2966,3 +3236,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
