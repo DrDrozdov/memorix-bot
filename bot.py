@@ -4,6 +4,7 @@ import tempfile
 from urllib.parse import urlparse
 import json
 import re
+import html
 from datetime import datetime, timedelta
 
 import psycopg2
@@ -456,6 +457,11 @@ def init_db():
         ADD COLUMN IF NOT EXISTS media_file_ids TEXT DEFAULT '[]'
     """)
 
+    cursor.execute("""
+        ALTER TABLE memories
+        ADD COLUMN IF NOT EXISTS formatted_text TEXT
+    """)
+
     conn.commit()
     cursor.close()
     conn.close()
@@ -465,6 +471,7 @@ def save_memory(
     user_id: int,
     username: str | None,
     text: str,
+    formatted_text: str | None = None
     content_type_override: str | None = None,
     source_title: str | None = None,
     source_username: str | None = None,
@@ -486,14 +493,15 @@ def save_memory(
         INSERT INTO memories (
             user_id, username, text, created_at, category, content_type, tags,
             source_title, source_username, source_chat_id, source_link,
-            media_type, media_file_id, media_file_ids
+            media_type, media_file_id, media_file_ids, formatted_text
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
     """, (
         user_id,
         username,
         text,
+        formatted_text,
         datetime.now(),
         metadata["category"],
         metadata["content_type"],
@@ -1894,7 +1902,8 @@ def get_memory_by_id(user_id: int, memory_id: int):
             id, text, created_at, category, content_type, tags,
             source_title, source_link,
             media_type, media_file_id, media_file_ids,
-            pinned
+            pinned,
+            formatted_text
         FROM memories
         WHERE user_id = %s AND id = %s
     """, (user_id, memory_id))
@@ -1957,7 +1966,8 @@ def delete_memory_by_id(user_id: int, memory_id: int):
 def update_memory_text(
     user_id: int,
     memory_id: int,
-    new_text: str
+    new_text: str,
+    formatted_text: str | None = None
 ):
     conn = get_connection()
     cursor = conn.cursor()
@@ -1971,6 +1981,7 @@ def update_memory_text(
         """,
         (
             new_text,
+            formatted_text,
             user_id,
             memory_id
         )
@@ -2084,8 +2095,11 @@ async def full_memory_handler(callback: CallbackQuery):
         media_type,
         media_file_id,
         media_file_ids,
-        pinned
+        pinned,
+        formatted_text
     ) = row
+
+    display_text = formatted_text or html.escape(text)
 
     source_line = ""
 
@@ -2104,11 +2118,12 @@ async def full_memory_handler(callback: CallbackQuery):
         f"{content_type}\n"
         f"🏷 {tag_text}\n"
         f"🕒 {format_moscow_datetime(created_at)}\n\n"
-        f"{text}"
+        f"{display_text}"
     )
 
-    await callback.message.answer(response)
+    parse_mode="HTML"
 
+    
     file_ids = []
 
     if media_file_ids:
@@ -2120,18 +2135,48 @@ async def full_memory_handler(callback: CallbackQuery):
     if not file_ids and media_file_id:
         file_ids = [media_file_id]
 
-    if file_ids:
-        await callback.message.answer(
-            f"📎 Медиафайлов: {len(file_ids)}"
-        )
+    if file_ids and media_type in ["photo", "album"]:
+        if len(file_ids) == 1 and len(response) <= 1024:
+            await callback.message.answer_photo(
+                photo=file_ids[0],
+                caption=response,
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.answer(
+                response,
+                parse_mode="HTML"
+            )
 
-        for file_id in file_ids:
-            if media_type == "video":
-                await callback.message.answer_video(file_id)
-            elif media_type == "video_note":
-                await callback.message.answer_video_note(file_id)
-            else:
+            for file_id in file_ids:
                 await callback.message.answer_photo(file_id)
+
+    elif file_ids and media_type == "video":
+        if len(response) <= 1024:
+            await callback.message.answer_video(
+                video=file_ids[0],
+                caption=response,
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.answer(
+                response,
+                parse_mode="HTML"
+            )
+            await callback.message.answer_video(file_ids[0])
+
+    elif file_ids and media_type == "video_note":
+        await callback.message.answer(
+            response,
+            parse_mode="HTML"
+        )
+        await callback.message.answer_video_note(file_ids[0])
+
+    else:
+        await callback.message.answer(
+            response,
+            parse_mode="HTML"
+        )
 
     await callback.answer()
 
@@ -2214,7 +2259,7 @@ async def similar_memory_card_callback(callback: CallbackQuery):
         )
         return
 
-    source_text, _ = source
+    source_text = source[1]
 
     rows = get_last_memories_for_ai(
         callback.from_user.id
@@ -2307,13 +2352,15 @@ async def edit_memory_callback(
         EditMemoryState.waiting_for_text
     )
 
+    safe_old_text = html.escape(old_text)
+
     await callback.message.answer(
         "✏️ Текущий текст / подпись:\n\n"
-        f"{old_text}\n\n"
+        f"<pre>{safe_old_text}</pre>\n\n"
         "Отправь новый текст.\n"
-        "Он заменит текст записи или станет подписью к медиа."
+        "Он заменит текст записи или станет подписью к медиа.",
+        parse_mode="HTML"
     )
-
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("edit_tags:"))
@@ -2438,8 +2485,12 @@ async def process_edit_tags(
     message: Message,
     state: FSMContext
 ):
-    data = await state.get_data()
-    memory_id = data["memory_id"]
+
+    if not message.text:
+        await message.answer(
+            "🏷 Отправь теги текстом через пробел."
+        )
+        return
 
     raw_tags = message.text.strip().split()
 
@@ -2518,7 +2569,8 @@ async def process_edit_memory(
     update_memory_text(
         message.from_user.id,
         memory_id,
-        message.text
+        message.text,
+        message.html_text
     )
 
     row = get_memory_by_id(
@@ -2546,15 +2598,22 @@ async def process_edit_memory(
         pinned
     ) = row
 
+    safe_old_text = html.escape(old_text)
+    safe_new_text = html.escape(text)
+
     response = (
         "Обновлено 🔄\n\n"
         f"{category}\n"
         f"{content_type}\n"
         f"🏷 {format_tags(tags)}\n\n"
-        "Старая версия:\n"
-        f"{old_text}\n\n"
-        "Новая версия:\n"
-        f"{text}"
+        "━━━━━━━━━━━━━━\n"
+        "СТАРАЯ ВЕРСИЯ\n"
+        "━━━━━━━━━━━━━━\n"
+        f"<pre>{safe_old_text}</pre>\n\n"
+        "━━━━━━━━━━━━━━\n"
+        "НОВАЯ ВЕРСИЯ\n"
+        "━━━━━━━━━━━━━━\n"
+        f"<pre>{safe_new_text}</pre>"
     )
 
     await message.answer(
@@ -2562,7 +2621,8 @@ async def process_edit_memory(
         reply_markup=get_after_edit_keyboard(
             memory_id,
             pinned
-        )
+        ),
+        parse_mode="HTML"
     )
 
     await state.clear()
@@ -2719,6 +2779,7 @@ async def media_handler(message: Message):
         user_id=message.from_user.id,
         username=message.from_user.username,
         text=text,
+        formatted_text=message.html_caption if message.caption else None,
         content_type_override=content_type,
         source_title=source["source_title"],
         source_username=source["source_username"],
@@ -2784,6 +2845,7 @@ async def save_text_handler(message: Message):
         user_id=message.from_user.id,
         username=message.from_user.username,
         text=message.text,
+        formatted_text=message.html_text,
         source_title=source["source_title"],
         source_username=source["source_username"],
         source_chat_id=source["source_chat_id"],
