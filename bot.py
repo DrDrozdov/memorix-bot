@@ -2840,9 +2840,9 @@ async def process_edit_memory(
         media_file_ids = [media_file_id]
 
     elif message.document:
-    media_type = "document"
-    media_file_id = message.document.file_id
-    media_file_ids = [media_file_id]
+        media_type = "document"
+        media_file_id = message.document.file_id
+        media_file_ids = [media_file_id]
 
     update_memory_text(
         user_id=message.from_user.id,
