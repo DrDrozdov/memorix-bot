@@ -2164,6 +2164,39 @@ def toggle_pin_memory(user_id: int, memory_id: int):
 
     return None    
 
+async def answer_long_text(message: Message, text: str, parse_mode: str | None = None):
+    limit = 3500
+
+    if len(text) <= limit:
+        await message.answer(
+            text,
+            parse_mode=parse_mode
+        )
+        return
+
+    plain_text = re.sub(r"<[^>]+>", "", text)
+
+    parts = []
+
+    while plain_text:
+        part = plain_text[:limit]
+
+        split_at = max(
+            part.rfind("\n\n"),
+            part.rfind("\n"),
+            part.rfind(". ")
+        )
+
+        if split_at < 1000:
+            split_at = limit
+
+        parts.append(plain_text[:split_at].strip())
+        plain_text = plain_text[split_at:].strip()
+
+    for part in parts:
+        if part:
+            await message.answer(part)
+
 def get_pinned_memories(user_id: int, limit: int = 10):
     conn = get_connection()
     cursor = conn.cursor()
@@ -2257,7 +2290,8 @@ async def full_memory_handler(callback: CallbackQuery):
                 parse_mode="HTML"
             )
         else:
-            await callback.message.answer(
+            await answer_long_text(
+                callback.message,
                 response,
                 parse_mode="HTML"
             )
@@ -2273,21 +2307,24 @@ async def full_memory_handler(callback: CallbackQuery):
                 parse_mode="HTML"
             )
         else:
-            await callback.message.answer(
+            await answer_long_text(
+                callback.message,
                 response,
                 parse_mode="HTML"
             )
             await callback.message.answer_video(file_ids[0])
 
     elif file_ids and media_type == "video_note":
-        await callback.message.answer(
+        await answer_long_text(
+            callback.message,
             response,
             parse_mode="HTML"
         )
         await callback.message.answer_video_note(file_ids[0])
 
     elif file_ids and media_type == "document":
-        await callback.message.answer(
+        await answer_long_text(
+            callback.message,
             response,
             parse_mode="HTML"
         )
@@ -2296,7 +2333,8 @@ async def full_memory_handler(callback: CallbackQuery):
             await callback.message.answer_document(file_id)
 
     else:
-        await callback.message.answer(
+        await answer_long_text(
+            callback.message,
             response,
             parse_mode="HTML"
         )
