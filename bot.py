@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 import psycopg2
 from aiogram import Bot, Dispatcher
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -1676,6 +1676,7 @@ async def today_handler(message: Message):
         WHERE user_id = %s
         AND DATE(created_at) = CURRENT_DATE
         ORDER BY pinned DESC, created_at DESC
+        LIMIT 20
     """, (message.from_user.id,))
 
     rows = cursor.fetchall()
@@ -1770,7 +1771,7 @@ async def cancel_reset_handler(callback: CallbackQuery):
 
     await callback.answer()
 
-@dp.message(Command("search"))
+@dp.message(Command("search"), StateFilter(None))
 async def search_handler(message: Message):
     query = message.text.replace("/search", "").strip()
 
@@ -1820,7 +1821,10 @@ async def search_handler(message: Message):
             )
         )
 
-@dp.message(lambda message: message.text and is_natural_search_query(message.text))
+@dp.message(
+    StateFilter(None),
+    lambda message: message.text and is_natural_search_query(message.text)
+)
 async def natural_search_handler(message: Message):
     query = clean_search_query(message.text)
 
@@ -1858,7 +1862,7 @@ async def natural_search_handler(message: Message):
     )
 
 
-@dp.message(lambda message: message.voice)
+@dp.message(StateFilter(None), lambda message: message.voice)
 async def voice_handler(message: Message):
     status_message = await message.answer("🎙 Обрабатываю голосовое...")
 
@@ -1933,7 +1937,10 @@ async def voice_handler(message: Message):
         metadata = save_memory(
             user_id=message.from_user.id,
             username=message.from_user.username,
-            text=text
+            text=text,
+            media_type="voice",
+            media_file_id=voice.file_id,
+            media_file_ids=[voice.file_id]
         )
         formatted_tags = format_tags(
             metadata.get("tags", [])
@@ -1978,39 +1985,39 @@ async def voice_handler(message: Message):
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
-@dp.message(lambda message: message.text == "🧠 Память")
+@dp.message(StateFilter(None), lambda message: message.text == "🧠 Память")
 async def memory_button_handler(message: Message):
     await memory_handler(message)
 
 
-@dp.message(lambda message: message.text == "📅 Сегодня")
+@dp.message(StateFilter(None), lambda message: message.text == "📅 Сегодня")
 async def today_button_handler(message: Message):
     await today_handler(message)
 
 
-@dp.message(lambda message: message.text == "⚙️ Помощь")
+@dp.message(StateFilter(None), lambda message: message.text == "⚙️ Помощь")
 async def help_button_handler(message: Message):
     await help_handler(message)
 
-@dp.message(lambda message: message.text == "📌 Закреплённые")
+@dp.message(StateFilter(None), lambda message: message.text == "📌 Закреплённые")
 async def pinned_button_handler(message: Message):
     await pinned_memories_handler(message)
 
-@dp.message(lambda message: message.text == "🔍 Поиск")
+@dp.message(StateFilter(None), lambda message: message.text == "🔍 Поиск")
 async def search_button_handler(message: Message):
     await message.answer(
         "Напиши:\n/search твой запрос",
         reply_markup=simple_back_keyboard("cancel_search")
     )
 
-@dp.message(lambda message: message.text == "🧩 Типы контента")
+@dp.message(StateFilter(None), lambda message: message.text == "🧩 Типы контента")
 async def content_types_button_handler(message: Message):
     await message.answer(
         "🧩 Выбери тип записей:",
         reply_markup=build_content_types_keyboard()
     )
 
-@dp.message(lambda message: message.text == "🏷 Теги")
+@dp.message(StateFilter(None), lambda message: message.text == "🏷 Теги")
 async def tags_button_handler(message: Message):
     tags = get_all_user_tags(message.from_user.id)
 
@@ -2029,7 +2036,7 @@ async def tags_button_handler(message: Message):
 
     await message.answer(response)
 
-@dp.message(lambda message: message.text == "📂 Категории")
+@dp.message(StateFilter(None), lambda message: message.text == "📂 Категории")
 async def categories_button_handler(message: Message):
     categories = get_all_user_categories(message.from_user.id)
 
@@ -2206,15 +2213,24 @@ def toggle_pin_memory(user_id: int, memory_id: int):
 
     return None    
 
-async def answer_long_text(message: Message, text: str, parse_mode: str | None = None):
+async def answer_long_text(
+    message: Message,
+    text: str,
+    parse_mode: str | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None
+):
     limit = 3500
+    sent_messages = []
 
     if len(text) <= limit:
-        await message.answer(
-            text,
-            parse_mode=parse_mode
+        sent_messages.append(
+            await message.answer(
+                text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
         )
-        return
+        return sent_messages
 
     plain_text = re.sub(r"<[^>]+>", "", text)
 
@@ -2235,9 +2251,22 @@ async def answer_long_text(message: Message, text: str, parse_mode: str | None =
         parts.append(plain_text[:split_at].strip())
         plain_text = plain_text[split_at:].strip()
 
-    for part in parts:
+    non_empty_parts = [part for part in parts if part]
+
+    for index, part in enumerate(non_empty_parts):
         if part:
-            await message.answer(part)
+            sent_messages.append(
+                await message.answer(
+                    part,
+                    reply_markup=(
+                        reply_markup
+                        if index == len(non_empty_parts) - 1
+                        else None
+                    )
+                )
+            )
+
+    return sent_messages
 
 def get_pinned_memories(user_id: int, limit: int = 10):
     conn = get_connection()
@@ -2363,6 +2392,14 @@ async def full_memory_handler(callback: CallbackQuery):
             parse_mode="HTML"
         )
         await callback.message.answer_video_note(file_ids[0])
+
+    elif file_ids and media_type == "voice":
+        await answer_long_text(
+            callback.message,
+            response,
+            parse_mode="HTML"
+        )
+        await callback.message.answer_voice(file_ids[0])
 
     elif file_ids and media_type == "document":
         await answer_long_text(
@@ -3002,21 +3039,23 @@ async def process_edit_memory(
         f"<pre>{safe_new_text}</pre>"
     )
 
-    sent_message = await message.answer(
+    sent_messages = await answer_long_text(
+        message,
         response,
+        parse_mode="HTML",
         reply_markup=get_after_edit_keyboard(
             memory_id,
             pinned
-        ),
-        parse_mode="HTML"
+        )
     )
 
-    register_memory_message(
-        message.from_user.id,
-        memory_id,
-        sent_message.chat.id,
-        sent_message.message_id
-    )
+    for sent_message in sent_messages:
+        register_memory_message(
+            message.from_user.id,
+            memory_id,
+            sent_message.chat.id,
+            sent_message.message_id
+        )
 
     await state.clear()
 
@@ -3144,14 +3183,23 @@ async def update_media_group_later(group_id: str):
         f"{safe_new_text}"
     )
 
-    await message.answer(
+    sent_messages = await answer_long_text(
+        message,
         response,
+        parse_mode="HTML",
         reply_markup=get_after_edit_keyboard(
             memory_id,
             pinned
-        ),
-        parse_mode="HTML"
+        )
     )
+
+    for sent_message in sent_messages:
+        register_memory_message(
+            message.from_user.id,
+            memory_id,
+            sent_message.chat.id,
+            sent_message.message_id
+        )
 
     await state.clear()
 
@@ -3183,7 +3231,10 @@ async def transcribe_video_note(message: Message):
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
-@dp.message(lambda message: message.photo or message.video or message.video_note)
+@dp.message(
+    StateFilter(None),
+    lambda message: message.photo or message.video or message.video_note
+)
 async def media_handler(message: Message):
     source = extract_forward_source(message)
 
@@ -3295,7 +3346,10 @@ async def media_handler(message: Message):
         sent_message.message_id
     )
 
-@dp.message(lambda message: message.text and message.text.strip().startswith("#"))
+@dp.message(
+    StateFilter(None),
+    lambda message: message.text and message.text.strip().startswith("#")
+)
 async def tag_search_handler(message: Message):
     tag = message.text.strip().split()[0]
 
@@ -3332,7 +3386,7 @@ async def cancel_text_handler(
         "Действие отменено."
     )
 
-@dp.message(lambda message: message.document)
+@dp.message(StateFilter(None), lambda message: message.document)
 async def document_handler(message: Message):
     source = extract_forward_source(message)
 
@@ -3390,7 +3444,7 @@ async def document_handler(message: Message):
         sent_message.message_id
     )
 
-@dp.message()
+@dp.message(StateFilter(None))
 async def save_text_handler(message: Message):
     if not message.text:
         sent_message = await message.answer(
@@ -3458,6 +3512,13 @@ async def save_text_handler(message: Message):
                 False
             )
         )
+
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        sent_message.chat.id,
+        sent_message.message_id
+    )
 
     
 async def main():
