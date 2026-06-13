@@ -2699,8 +2699,7 @@ async def category_callback(callback: CallbackQuery):
         build_search_response(rows),
         reply_markup=build_search_keyboard(rows)
     )
-
-        await callback.answer()
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "cancel_search")
 async def cancel_search_callback(callback: CallbackQuery):
