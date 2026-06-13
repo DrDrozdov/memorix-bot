@@ -35,6 +35,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 media_group_buffer = {}
+memory_message_registry = {}
 edit_media_group_buffer = {}
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
@@ -560,7 +561,7 @@ def get_recent_memories(user_id: int, limit: int = 5):
     cursor = conn.cursor()
 
     cursor.execute("""
-    SELECT id, text, created_at, category, content_type, tags
+    SELECT id, text, created_at, category, content_type, tags, pinned
     FROM memories
     WHERE user_id = %s
     ORDER BY id DESC
@@ -1546,6 +1547,31 @@ def clean_search_query(text: str) -> str:
 
     return query
 
+def register_memory_message(user_id: int, memory_id: int, chat_id: int, message_id: int):
+    key = (user_id, memory_id)
+
+    if key not in memory_message_registry:
+        memory_message_registry[key] = []
+
+    item = (chat_id, message_id)
+
+    if item not in memory_message_registry[key]:
+        memory_message_registry[key].append(item)
+
+
+async def delete_registered_memory_messages(user_id: int, memory_id: int):
+    key = (user_id, memory_id)
+    messages = memory_message_registry.pop(key, [])
+
+    for chat_id, message_id in messages:
+        try:
+            await bot.delete_message(
+                chat_id=chat_id,
+                message_id=message_id
+            )
+        except Exception as error:
+            print(f"Delete registered message error: {error}")
+
 def format_memory_list(memories, title: str):
     response = f"{title}\n\n"
 
@@ -1624,13 +1650,11 @@ async def memory_handler(message: Message):
         await message.answer("Пока ничего не сохранено.")
         return
 
-    response = format_memory_list(
-        memories,
-        "🧠 Последние сохранения:"
+    await message.answer(
+        build_search_response(memories),
+        reply_markup=build_search_keyboard(memories)
     )
-
-    await message.answer(response)
-
+    
 
 @dp.message(Command("today"))
 async def today_handler(message: Message):
@@ -1638,11 +1662,11 @@ async def today_handler(message: Message):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, text, created_at, category, content_type, tags
+        SELECT id, text, created_at, category, content_type, tags, pinned
         FROM memories
         WHERE user_id = %s
         AND DATE(created_at) = CURRENT_DATE
-        ORDER BY created_at DESC
+        ORDER BY pinned DESC, created_at DESC
     """, (message.from_user.id,))
 
     rows = cursor.fetchall()
@@ -1654,12 +1678,10 @@ async def today_handler(message: Message):
         await message.answer("📭 Сегодня пока ничего не сохранено.")
         return
 
-    response = format_memory_list(
-        rows,
-        "📅 Сохранения за сегодня:"
+    await message.answer(
+        build_search_response(rows),
+        reply_markup=build_search_keyboard(rows)
     )
-
-    await message.answer(response)
 
 @dp.message(Command("pinned"))
 async def pinned_memories_handler(message: Message):
@@ -1892,9 +1914,16 @@ async def voice_handler(message: Message):
                 f"🎙 Распознал запрос: «{text}»"
             )
 
-            await message.answer(
+            sent_message = await message.answer(
                 build_search_response(selected_rows),
                 reply_markup=build_search_keyboard(selected_rows)
+            )
+
+            register_memory_message(
+                message.from_user.id,
+                metadata["memory_id"],
+                sent_message.chat.id,
+                sent_message.message_id
             )
 
             return
@@ -2374,33 +2403,49 @@ async def delete_search_callback(callback: CallbackQuery):
         await callback.answer("Запись не найдена.", show_alert=True)
         return
 
+    register_memory_message(
+        callback.from_user.id,
+        memory_id,
+        callback.message.chat.id,
+        callback.message.message_id
+    )
+
+    await delete_registered_memory_messages(
+        callback.from_user.id,
+        memory_id
+    )
+
     await callback.answer("Удалено.")
-    await callback.message.answer("🗑 Запись удалена из памяти.")
 
 @dp.callback_query(lambda c: c.data.startswith("delete_memory:"))
 async def delete_memory_card_callback(callback: CallbackQuery):
-    memory_id = int(
-        callback.data.split(":")[1]
+    memory_id = int(callback.data.split(":")[1])
+
+    deleted = delete_memory_by_id(
+        callback.from_user.id,
+        memory_id
     )
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    if not deleted:
+        await callback.answer(
+            "Запись не найдена.",
+            show_alert=True
+        )
+        return
 
-    cursor.execute(
-        "DELETE FROM memories WHERE id = %s",
-        (memory_id,)
+    register_memory_message(
+        callback.from_user.id,
+        memory_id,
+        callback.message.chat.id,
+        callback.message.message_id
     )
 
-    conn.commit()
-
-    cursor.close()
-    conn.close()
-
-    await callback.message.edit_text(
-        "🗑 Запись удалена"
+    await delete_registered_memory_messages(
+        callback.from_user.id,
+        memory_id
     )
 
-    await callback.answer()
+    await callback.answer("Запись удалена.")
 
 @dp.callback_query(lambda c: c.data.startswith("similar_memory:"))
 async def similar_memory_card_callback(callback: CallbackQuery):
@@ -2637,9 +2682,16 @@ async def category_callback(callback: CallbackQuery):
         )
         return
 
-    await callback.message.answer(
+    sent_message = await callback.message.answer(
         build_search_response(rows),
         reply_markup=build_search_keyboard(rows)
+    )
+
+    register_memory_message(
+        callback.from_user.id,
+        metadata["memory_id"],
+        sent_message.chat.id,
+        sent_message.message_id
     )
 
     await callback.answer()
@@ -2775,7 +2827,7 @@ async def process_edit_tags(
         formatted_text
     ) = row
 
-    await message.answer(
+    sent_message = await message.answer(
         "Теги обновлены 🔄\n\n"
         f"{category}\n"
         f"{content_type}\n"
@@ -2785,6 +2837,13 @@ async def process_edit_tags(
             memory_id,
             pinned
         )
+    )
+
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        sent_message.chat.id,
+        sent_message.message_id
     )
 
 @dp.message(EditMemoryState.waiting_for_text)
@@ -2936,13 +2995,20 @@ async def process_edit_memory(
         f"<pre>{safe_new_text}</pre>"
     )
 
-    await message.answer(
+    sent_message = await message.answer(
         response,
         reply_markup=get_after_edit_keyboard(
             memory_id,
             pinned
         ),
         parse_mode="HTML"
+    )
+
+    register_memory_message(
+        message.from_user.id,
+        memory_id,
+        sent_message.chat.id,
+        sent_message.message_id
     )
 
     await state.clear()
@@ -3204,7 +3270,7 @@ async def media_handler(message: Message):
     if source["source_title"]:
         source_line = f"📣 {source['source_title']}\n"
 
-    await message.answer(
+    sent_message = await message.answer(
         f"{title}\n\n"
         f"{source_line}"
         f"📝 {preview}\n"
@@ -3213,6 +3279,13 @@ async def media_handler(message: Message):
             metadata["memory_id"],
             False
         )
+    )
+
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        sent_message.chat.id,
+        sent_message.message_id
     )
 
 @dp.message(lambda message: message.text and message.text.strip().startswith("#"))
@@ -3290,7 +3363,7 @@ async def document_handler(message: Message):
     if source["source_title"]:
         source_line = f"📣 {source['source_title']}\n"
 
-    await message.answer(
+    sent_message = await message.answer(
         f"📎 Файл сохранён\n\n"
         f"{source_line}"
         f"📄 {file_name}\n"
@@ -3303,13 +3376,27 @@ async def document_handler(message: Message):
         )
     )
 
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        sent_message.chat.id,
+        sent_message.message_id
+    )
+
 @dp.message()
 async def save_text_handler(message: Message):
     if not message.text:
-        await message.answer(
+        sent_message = await message.answer(
             "Пока поддерживаются только текст и голосовые сообщения."
         )
         return
+
+        register_memory_message(
+            message.from_user.id,
+            metadata["memory_id"],
+            sent_message.chat.id,
+            sent_message.message_id
+        )
 
     source = extract_forward_source(message)
 
