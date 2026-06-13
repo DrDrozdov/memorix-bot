@@ -1975,6 +1975,13 @@ async def voice_handler(message: Message):
             status_message.message_id
         )
 
+        register_memory_message(
+            message.from_user.id,
+            metadata["memory_id"],
+            message.chat.id,
+            message.message_id
+        )
+
     except Exception as error:
         print(f"Voice processing error: {error}")
         await status_message.edit_text(
@@ -2444,7 +2451,10 @@ async def content_type_callback(callback: CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(lambda callback: callback.data.startswith("delete:"))
-async def delete_search_callback(callback: CallbackQuery):
+async def delete_search_callback(
+    callback: CallbackQuery,
+    state: FSMContext
+):
     memory_id = int(callback.data.split(":")[1])
 
     deleted = delete_memory_by_id(callback.from_user.id, memory_id)
@@ -2465,10 +2475,17 @@ async def delete_search_callback(callback: CallbackQuery):
         memory_id
     )
 
+    state_data = await state.get_data()
+    if state_data.get("memory_id") == memory_id:
+        await state.clear()
+
     await callback.answer("Удалено.")
 
 @dp.callback_query(lambda c: c.data.startswith("delete_memory:"))
-async def delete_memory_card_callback(callback: CallbackQuery):
+async def delete_memory_card_callback(
+    callback: CallbackQuery,
+    state: FSMContext
+):
     memory_id = int(callback.data.split(":")[1])
 
     deleted = delete_memory_by_id(
@@ -2494,6 +2511,10 @@ async def delete_memory_card_callback(callback: CallbackQuery):
         callback.from_user.id,
         memory_id
     )
+
+    state_data = await state.get_data()
+    if state_data.get("memory_id") == memory_id:
+        await state.clear()
 
     await callback.answer("Запись удалена.")
 
@@ -2610,7 +2631,7 @@ async def edit_memory_callback(
 
     safe_old_text = html.escape(old_text)
 
-    await callback.message.answer(
+    edit_prompt = await callback.message.answer(
         "✏️ Текущий текст / подпись:\n\n"
         f"<pre>{safe_old_text}</pre>\n\n"
         "Отправь новый текст, фото, видео, кружок, голосовое или альбом.\n"
@@ -2618,6 +2639,14 @@ async def edit_memory_callback(
         parse_mode="HTML",
         reply_markup=cancel_edit_keyboard()
     )
+
+    register_memory_message(
+        callback.from_user.id,
+        memory_id,
+        edit_prompt.chat.id,
+        edit_prompt.message_id
+    )
+
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("edit_tags:"))
@@ -2898,6 +2927,13 @@ async def process_edit_memory(
     memory_id = data["memory_id"]
     old_text = data.get("old_text", "")
 
+    register_memory_message(
+        message.from_user.id,
+        memory_id,
+        message.chat.id,
+        message.message_id
+    )
+
     if message.media_group_id and (message.photo or message.video):
         group_id = str(message.media_group_id)
 
@@ -3099,7 +3135,7 @@ async def save_media_group_later(group_id: str):
     if source["source_title"]:
         source_line = f"📣 {source['source_title']}\n"
 
-    await message.answer(
+    sent_message = await message.answer(
         f"🖼 Медиа-пост сохранён\n\n"
         f"{source_line}"
         f"📝 {preview}\n"
@@ -3108,6 +3144,21 @@ async def save_media_group_later(group_id: str):
             metadata["memory_id"],
             False
         )
+    )
+
+    for item in media_items:
+        register_memory_message(
+            message.from_user.id,
+            metadata["memory_id"],
+            item["chat_id"],
+            item["message_id"]
+        )
+
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        sent_message.chat.id,
+        sent_message.message_id
     )
 
 async def update_media_group_later(group_id: str):
@@ -3241,17 +3292,23 @@ async def media_handler(message: Message):
     if message.photo:
         current_media = {
             "type": "photo",
-            "file_id": message.photo[-1].file_id
+            "file_id": message.photo[-1].file_id,
+            "chat_id": message.chat.id,
+            "message_id": message.message_id
         }
     elif message.video:
         current_media = {
             "type": "video",
-            "file_id": message.video.file_id
+            "file_id": message.video.file_id,
+            "chat_id": message.chat.id,
+            "message_id": message.message_id
         }
     else:
         current_media = {
             "type": "video_note",
-            "file_id": message.video_note.file_id
+            "file_id": message.video_note.file_id,
+            "chat_id": message.chat.id,
+            "message_id": message.message_id
         }
 
     if message.media_group_id:
@@ -3344,6 +3401,13 @@ async def media_handler(message: Message):
         metadata["memory_id"],
         sent_message.chat.id,
         sent_message.message_id
+    )
+
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        message.chat.id,
+        message.message_id
     )
 
 @dp.message(
@@ -3444,6 +3508,13 @@ async def document_handler(message: Message):
         sent_message.message_id
     )
 
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        message.chat.id,
+        message.message_id
+    )
+
 @dp.message(StateFilter(None))
 async def save_text_handler(message: Message):
     if not message.text:
@@ -3518,6 +3589,13 @@ async def save_text_handler(message: Message):
         metadata["memory_id"],
         sent_message.chat.id,
         sent_message.message_id
+    )
+
+    register_memory_message(
+        message.from_user.id,
+        metadata["memory_id"],
+        message.chat.id,
+        message.message_id
     )
 
     
