@@ -564,7 +564,7 @@ def get_recent_memories(user_id: int, limit: int = 5):
     SELECT id, text, created_at, category, content_type, tags, pinned
     FROM memories
     WHERE user_id = %s
-    ORDER BY id DESC
+    ORDER BY pinned DESC, id DESC
     LIMIT %s
 """, (user_id, limit))
 
@@ -949,6 +949,15 @@ def build_single_memory_response(row):
     response += f"\n{preview}"
 
     return response
+
+def get_message_html_caption(message: Message):
+    if not message.caption:
+        return None
+
+    try:
+        return message.html_text
+    except Exception:
+        return html.escape(message.caption)
 
 def build_search_keyboard(selected_rows):
     keyboard = []
@@ -1919,13 +1928,6 @@ async def voice_handler(message: Message):
                 reply_markup=build_search_keyboard(selected_rows)
             )
 
-            register_memory_message(
-                message.from_user.id,
-                metadata["memory_id"],
-                sent_message.chat.id,
-                sent_message.message_id
-            )
-
             return
 
         metadata = save_memory(
@@ -1952,8 +1954,19 @@ async def voice_handler(message: Message):
         else:
             await status_message.edit_text(
                 "🎙 Голосовое сохранено\n\n"
-                f"📝 {voice_preview}"
+                f"📝 {voice_preview}",   
+                reply_markup=get_memory_card_keyboard(
+                                metadata["memory_id"],
+                                False
+                            )
             )
+            
+        register_memory_message(
+            message.from_user.id,
+            metadata["memory_id"],
+            status_message.chat.id,
+            status_message.message_id
+        )
 
     except Exception as error:
         print(f"Voice processing error: {error}")
@@ -2687,14 +2700,7 @@ async def category_callback(callback: CallbackQuery):
         reply_markup=build_search_keyboard(rows)
     )
 
-    register_memory_message(
-        callback.from_user.id,
-        metadata["memory_id"],
-        sent_message.chat.id,
-        sent_message.message_id
-    )
-
-    await callback.answer()
+        await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "cancel_search")
 async def cancel_search_callback(callback: CallbackQuery):
@@ -2841,7 +2847,7 @@ async def process_edit_tags(
 
     register_memory_message(
         message.from_user.id,
-        metadata["memory_id"],
+        memory_id,
         sent_message.chat.id,
         sent_message.message_id
     )
@@ -2876,7 +2882,7 @@ async def process_edit_memory(
                 "state": state,
                 "state_data": data,
                 "caption": message.caption,
-                "html_caption": message.html_caption,
+                "html_caption": get_message_html_caption(message),
                 "media_items": []
             }
 
@@ -2887,8 +2893,10 @@ async def process_edit_memory(
         if message.caption:
             edit_media_group_buffer[group_id]["caption"] = message.caption
 
-        if message.html_caption:
-            edit_media_group_buffer[group_id]["html_caption"] = message.html_caption
+        formatted_caption = get_message_html_caption(message)
+
+        if formatted_caption:
+            edit_media_group_buffer[group_id]["html_caption"] = formatted_caption
 
         edit_media_group_buffer[group_id]["media_items"].append(current_media)
 
@@ -2910,7 +2918,7 @@ async def process_edit_memory(
         )
         return
 
-    formatted_text = message.html_text or message.html_caption
+    formatted_text = message.html_text or get_message_html_caption(message)
 
     media_type = None
     media_file_id = None
@@ -3249,7 +3257,7 @@ async def media_handler(message: Message):
         user_id=message.from_user.id,
         username=message.from_user.username,
         text=text,
-        formatted_text=message.html_caption if message.caption else None,
+        formatted_text=get_message_html_caption(message),
         content_type_override=content_type,
         source_title=source["source_title"],
         source_username=source["source_username"],
@@ -3335,7 +3343,7 @@ async def document_handler(message: Message):
     mime_type = document.mime_type or "unknown"
 
     text = message.caption or f"Файл: {file_name}"
-    formatted_text = message.html_caption if message.caption else None
+    formatted_text = get_message_html_caption(message)
 
     metadata = save_memory(
         user_id=message.from_user.id,
@@ -3431,32 +3439,32 @@ async def save_text_handler(message: Message):
         source_line = f"📣 {source['source_title']}\n"
 
     if formatted_tags:
-        await message.answer(
+        sent_message = await message.answer(
             f"{save_title}\n\n"
             f"{source_line}"
             f"{preview_line}\n"
             f"🏷 {formatted_tags}",
             reply_markup=get_memory_card_keyboard(
                 metadata["memory_id"],
-                False 
-            )   
+                False
+            )
         )
     else:
-            await message.answer(
-                f"{save_title}\n\n"
-                f"{source_line}"
-                f"{preview_line}\n",
-                reply_markup=get_memory_card_keyboard(
-                    metadata["memory_id"],
-                    False
-                )
+        sent_message = await message.answer(
+            f"{save_title}\n\n"
+            f"{source_line}"
+            f"{preview_line}\n",
+            reply_markup=get_memory_card_keyboard(
+                metadata["memory_id"],
+                False
             )
+        )
 
-
-
+    
 async def main():
     init_db()
     await bot.set_my_commands([
+    BotCommand(command="start", description="Запустить бота"),
     BotCommand(command="memory", description="Последние сохранения"),
     BotCommand(command="search", description="AI-поиск по памяти"),
     BotCommand(command="today", description="Сохранения за сегодня"),
